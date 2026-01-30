@@ -255,6 +255,22 @@ const UI = {
 const MetalInventory = (() => {
   const LS_ACTIVE = "emjac_mi_active_session_v1";
 
+  // Session state (Hoisted)
+  let state = {
+    active: false,
+    sessionName: "",
+    countedBy: "",
+    startedAt: "",
+    pausedAt: "",
+    completedAt: "",
+    entries: [], // array of entry
+    draft: { step: "idle", location: "", part: "", partKey: "", thick: null, sheetThickSource: "", type: "", desc: "", stackHeight: null, paper: null },
+    pendingConfirm: null, // { kind, text }
+    sigDataUrl: "",
+    listening: false,
+    lang: "en" // "en" | "es"
+  };
+
   const PAPER_THICK = 0.004;
 
   const normPart = (v) => String(v || "").toUpperCase().replace(/[^A-Z0-9]/g, "").trim();
@@ -641,20 +657,8 @@ const MetalInventory = (() => {
   })();
 
   // Session state
-  let state = {
-    active: false,
-    sessionName: "",
-    countedBy: "",
-    startedAt: "",
-    pausedAt: "",
-    completedAt: "",
-    entries: [], // array of entry
-    draft: { step: "idle", location: "", part: "", partKey: "", thick: null, sheetThickSource: "", type: "", desc: "", stackHeight: null, paper: null },
-    pendingConfirm: null, // { kind, text }
-    sigDataUrl: "",
-    listening: false,
-    lang: "en" // "en" | "es"
-  };
+  // Session state (Moved to top of IIFE)
+  // let state = { ... };
 
   const persist = () => {
     try { localStorage.setItem(LS_ACTIVE, JSON.stringify(state)); } catch (e) { }
@@ -1411,7 +1415,7 @@ const MetalInventory = (() => {
   };
 
 
-  
+
 
   const promptTextValue = (label, current) => {
     const v = window.prompt(`${label} (leave blank to keep):`, current || "");
