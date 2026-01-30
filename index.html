@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <meta content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0" name="viewport" />
+  <meta content="#000000" name="theme-color" />
+  <title>Metal Inventory</title>
+
+  <!-- Modern Font -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=JetBrains+Mono:wght@500&display=swap"
+    rel="stylesheet">
+
+  <style>
+    /* =========================================
+       THEME: CYBER-INDUSTRIAL HDR (PREMIUM)
+       ========================================= */
+    :root {
+      --bg-deep: #030407;
+      --bg-surface: #0a0b10;
+      --brand-primary: #00f2ea;
+      --brand-secondary: #4361ee;
+      --brand-accent: #f59e0b;
+      /* Amber for industrial alerts */
+
+      /* Vivid Neons */
+      --neon-cyan: #00f2ea;
+      --neon-blue: #4361ee;
+      --neon-amber: #f59e0b;
+      --neon-green: #10b981;
+      --neon-red: #ef4444;
+
+      /* Glass */
+      --glass-bg: rgba(13, 15, 25, 0.7);
+      --glass-border: rgba(255, 255, 255, 0.08);
+      --glass-highlight: rgba(0, 242, 234, 0.05);
+      --blur: blur(25px);
+
+      /* Typography */
+      --font-main: 'Inter', system-ui, sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+    }
+
+    /* Scanline Effect Overlay */
+    body::after {
+      content: "";
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.05) 50%),
+        linear-gradient(90deg, rgba(255, 0, 0, 0.02), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.02));
+      z-index: 9999;
+      background-size: 100% 2px, 3px 100%;
+      pointer-events: none;
+      opacity: 0.3;
+    }
+
+    * {
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    body {
+      margin: 0;
+      padding: 20px;
+      min-height: 100vh;
+      background-color: var(--bg-deep);
+      background-image:
+        linear-gradient(to bottom, rgba(3, 4, 7, 0.7), rgba(3, 4, 7, 0.85)),
+        url('assets/warehouse-bg-hd.png');
+      background-size: cover;
+      background-position: center;
+      background-attachment: fixed;
+      font-family: var(--font-main);
+      color: #fff;
+      display: flex;
+      justify-content: center;
+    }
+
+    main {
+      width: 100%;
+      max-width: 800px;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+      padding-bottom: 120px;
+      z-index: 10;
+    }
+
+    /* --- BRANDING --- */
+    .app-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 0;
+      margin-bottom: 10px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .brand-logo {
+      width: 32px;
+      height: 32px;
+      background: linear-gradient(135deg, var(--neon-cyan), var(--neon-blue));
+      clip-path: polygon(25% 0%, 100% 0%, 75% 100%, 0% 100%);
+      filter: drop-shadow(0 0 8px var(--neon-cyan));
+    }
+
+    .brand-text {
+      font-weight: 800;
+      letter-spacing: 0.1em;
+      font-size: 0.9rem;
+      color: #fff;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .brand-text span:last-child {
+      font-size: 0.6rem;
+      color: var(--neon-cyan);
+      letter-spacing: 0.3em;
+      margin-top: -2px;
+    }
+
+    /* --- DASHBOARD GLANCE --- */
+    .dashboard-glance {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+      margin-bottom: 8px;
+    }
+
+    .glance-card {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 16px;
+      padding: 16px;
+      text-align: center;
+    }
+
+    .glance-card label {
+      font-size: 0.6rem;
+      margin-bottom: 4px;
+    }
+
+    .glance-card div {
+      font-family: var(--font-mono);
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: var(--neon-cyan);
+    }
+
+    /* --- CARDS --- */
+    .card {
+      background: var(--glass-bg);
+      backdrop-filter: var(--blur);
+      -webkit-backdrop-filter: var(--blur);
+      border: 1px solid var(--glass-border);
+      border-top: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 20px;
+      padding: 24px;
+      box-shadow: 0 30px 60px -12px rgba(0, 0, 0, 0.6);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: radial-gradient(circle at top right, var(--glass-highlight), transparent);
+      pointer-events: none;
+    }
+
+    /* Glow bar on top of card */
+    .card-accent {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--neon-cyan), transparent);
+    }
+
+    /* --- HEADINGS --- */
+    .sectionTitle {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    h2 {
+      font-size: 1.25rem;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      background: linear-gradient(to right, #fff, #a5b4fc);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+      text-transform: uppercase;
+    }
+
+    /* --- INPUTS --- */
+    .input-group {
+      margin-bottom: 20px;
+    }
+
+    label {
+      display: block;
+      color: #94a3b8;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      margin-bottom: 8px;
+    }
+
+    input {
+      width: 100%;
+      background: rgba(0, 0, 0, 0.3);
+      border: 1px solid var(--glass-border);
+      border-radius: 12px;
+      padding: 16px;
+      color: #fff;
+      font-family: var(--font-main);
+      font-size: 1rem;
+      transition: all 0.2s;
+    }
+
+    input:focus {
+      outline: none;
+      border-color: var(--neon-cyan);
+      background: rgba(0, 0, 0, 0.5);
+      box-shadow: 0 0 0 4px rgba(0, 242, 234, 0.1);
+    }
+
+    /* --- BUTTONS (The "Wow" Factor) --- */
+    .actions {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 16px;
+      margin-top: 24px;
+    }
+
+    button {
+      position: relative;
+      padding: 18px;
+      border-radius: 14px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      background: rgba(255, 255, 255, 0.05);
+      color: #fff;
+      font-weight: 700;
+      font-size: 0.95rem;
+      letter-spacing: 0.02em;
+      cursor: pointer;
+      overflow: hidden;
+      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      text-transform: uppercase;
+    }
+
+    /* Hover State -> Brighten */
+    button:hover {
+      background: rgba(255, 255, 255, 0.1);
+      transform: translateY(-2px);
+      box-shadow: 0 10px 20px -5px rgba(0, 0, 0, 0.4);
+      border-color: rgba(255, 255, 255, 0.3);
+    }
+
+    button:active {
+      transform: translateY(0) scale(0.98);
+    }
+
+    /* PRIMARY (Start, Export, Record) -> Neon Gradients */
+    button.primary,
+    #miStartResume,
+    #miRecord,
+    #miComplete {
+      background: linear-gradient(135deg, var(--neon-blue), var(--neon-purple));
+      border: none;
+      box-shadow: 0 8px 24px rgba(67, 97, 238, 0.3);
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+    }
+
+    button.primary:hover,
+    #miStartResume:hover,
+    #miRecord:hover,
+    #miComplete:hover {
+      box-shadow: 0 12px 32px rgba(67, 97, 238, 0.5);
+      filter: brightness(1.2);
+    }
+
+    /* DANGER (Pause, Reset, Clear) */
+    button.danger,
+    #miPause,
+    #miNewSession,
+    #miSigClear {
+      color: #ff8fa3;
+      border-color: rgba(247, 37, 133, 0.3);
+      background: rgba(247, 37, 133, 0.05);
+    }
+
+    button.danger:hover,
+    #miPause:hover {
+      background: rgba(247, 37, 133, 0.15);
+      box-shadow: 0 8px 24px rgba(247, 37, 133, 0.2);
+      color: #fff;
+    }
+
+    /* MANUAL YES/NO visibility fix */
+    #miYes {
+      border: 1px solid var(--neon-green);
+      color: var(--neon-green);
+      background: rgba(55, 255, 139, 0.05);
+    }
+
+    #miNo {
+      border: 1px solid var(--neon-pink);
+      color: var(--neon-pink);
+      background: rgba(247, 37, 133, 0.05);
+    }
+
+    /* Disabled State - KEEP VISIBLE but distinct */
+    button:disabled {
+      opacity: 0.3;
+      filter: grayscale(1);
+      cursor: not-allowed;
+      pointer-events: none;
+      box-shadow: none;
+      transform: none;
+    }
+
+    /* VOICE VISUALIZER */
+    .visualizer {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      height: 40px;
+      margin: 10px 0;
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+
+    .visualizer.active {
+      opacity: 1;
+    }
+
+    .bar {
+      width: 4px;
+      height: 10px;
+      background: var(--neon-cyan);
+      border-radius: 2px;
+      animation: bar-pulse 0.8s ease-in-out infinite;
+    }
+
+    .bar:nth-child(2) {
+      animation-delay: 0.1s;
+      height: 20px;
+    }
+
+    .bar:nth-child(3) {
+      animation-delay: 0.2s;
+      height: 30px;
+    }
+
+    .bar:nth-child(4) {
+      animation-delay: 0.3s;
+      height: 15px;
+    }
+
+    .bar:nth-child(5) {
+      animation-delay: 0.4s;
+      height: 25px;
+    }
+
+    @keyframes bar-pulse {
+
+      0%,
+      100% {
+        transform: scaleY(1);
+      }
+
+      50% {
+        transform: scaleY(1.8);
+      }
+    }
+
+    /* RECORD BUTTON - Special Pulse */
+    #miRecord {
+      width: 100%;
+      background: linear-gradient(135deg, #00f2ea, #4361ee);
+      color: #000;
+      font-weight: 800;
+      font-size: 1.1rem;
+      padding: 24px;
+      margin-bottom: 10px;
+      border-radius: 100px;
+      /* Circular for that modern look */
+      box-shadow: 0 0 30px rgba(0, 242, 234, 0.3);
+    }
+
+    #miRecord:not(:disabled) {
+      animation: record-glow 3s infinite;
+    }
+
+    @keyframes record-glow {
+      0% {
+        box-shadow: 0 0 0 0 rgba(0, 242, 234, 0.4);
+      }
+
+      70% {
+        box-shadow: 0 0 0 20px rgba(0, 242, 234, 0);
+      }
+
+      100% {
+        box-shadow: 0 0 0 0 rgba(0, 242, 234, 0);
+      }
+    }
+
+    /* --- CHAT --- */
+    .chat-container {
+      background: rgba(0, 0, 0, 0.2);
+      border-radius: 16px;
+      padding: 20px;
+      height: 320px;
+      overflow-y: auto;
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      margin: 16px 0;
+    }
+
+    .miBubble {
+      padding: 12px 18px;
+      border-radius: 12px;
+      font-size: 0.95rem;
+      line-height: 1.5;
+      max-width: 85%;
+      position: relative;
+      animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    }
+
+    @keyframes popIn {
+      from {
+        opacity: 0;
+        transform: scale(0.8) translateY(10px);
+      }
+
+      to {
+        opacity: 1;
+        transform: scale(1) translateY(0);
+      }
+    }
+
+    .miBubble.sys {
+      background: rgba(255, 255, 255, 0.1);
+      align-self: flex-start;
+      border-bottom-left-radius: 2px;
+      color: #e2e8f0;
+    }
+
+    .miBubble.user {
+      background: var(--neon-blue);
+      align-self: flex-end;
+      border-bottom-right-radius: 2px;
+      color: #fff;
+      box-shadow: 0 4px 12px rgba(67, 97, 238, 0.3);
+    }
+
+    /* --- ENTRIES --- */
+    .miEntry {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 12px;
+      padding: 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+
+    .miEntryDetails {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px 24px;
+    }
+
+    .data-point span {
+      display: block;
+      font-size: 0.7rem;
+      color: #64748b;
+      margin-bottom: 2px;
+    }
+
+    .data-point strong {
+      font-family: var(--font-mono);
+      color: var(--neon-cyan);
+    }
+
+    /* --- CHIPS & NOTIFICATIONS --- */
+    .chip {
+      padding: 4px 12px;
+      border-radius: 99px;
+      font-size: 0.75rem;
+      font-weight: 700;
+      background: #334155;
+      color: #fff;
+    }
+
+    .warn,
+    .ok {
+      padding: 16px;
+      border-radius: 12px;
+      text-align: center;
+      margin-top: 16px;
+      font-weight: 600;
+      animation: slideDown 0.3s ease;
+    }
+
+    .warn {
+      background: rgba(239, 68, 68, 0.2);
+      color: #fca5a5;
+      border: 1px solid rgba(239, 68, 68, 0.3);
+    }
+
+    .ok {
+      background: rgba(16, 185, 129, 0.2);
+      color: #6ee7b7;
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+
+    @keyframes slideDown {
+      from {
+        transform: translateY(-10px);
+        opacity: 0;
+      }
+
+      to {
+        transform: translateY(0);
+        opacity: 1;
+      }
+    }
+
+    /* Canvas */
+    canvas {
+      background: #fff;
+      border-radius: 12px;
+      width: 100%;
+      cursor: crosshair;
+    }
+  </style>
+</head>
+
+<body>
+  <main>
+    <!-- Header Branding -->
+    <header class="app-header">
+      <div class="brand">
+        <div class="brand-logo"></div>
+        <div class="brand-text">
+          <span>MATERIAL INVENTORY</span>
+          <span>CYBERFLUX // SYSTEMS</span>
+        </div>
+      </div>
+      <span class="chip" id="miStatusChip"
+        style="border: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.5);">NO SESSION</span>
+    </header>
+
+    <!-- Dash Summary -->
+    <div class="dashboard-glance">
+      <div class="glance-card">
+        <label>TOTAL ENTRIES</label>
+        <div id="miCountDash">0</div>
+      </div>
+      <div class="glance-card">
+        <label>SESSION LOCK</label>
+        <div id="miLockDash" style="font-size: 0.8rem; letter-spacing: 1px;">IDLE</div>
+      </div>
+      <div class="glance-card">
+        <label>VOICE ENGINE</label>
+        <div id="miEngineDash" style="color: var(--neon-amber); font-size: 0.8rem;">READY</div>
+      </div>
+    </div>
+
+    <!-- Header -->
+    <div class="card">
+      <div class="card-accent"></div>
+      <div class="sectionTitle">
+        <h2>Session Setup</h2>
+      </div>
+
+      <div class="input-group">
+        <label>Counted By</label>
+        <input id="miCountedBy" placeholder="Enter Name" autocomplete="off" />
+      </div>
+
+      <div class="input-group">
+        <label>Session Name</label>
+        <input id="miSessionName" placeholder="e.g. Rack A - Monthly" autocomplete="off" />
+      </div>
+
+      <div class="actions">
+        <button class="primary" id="miStartResume" type="button">Start Session</button>
+        <button id="miPause" type="button">Pause</button>
+        <button class="danger" id="miNewSession" type="button">Reset</button>
+      </div>
+    </div>
+
+    <!-- Voice Control -->
+    <div class="card">
+      <div class="card-accent"></div>
+      <div class="sectionTitle">
+        <h2>Voice Terminal</h2>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <button id="miLangToggle" type="button"
+            style="padding: 6px 12px; font-size: 0.75rem; min-width: auto; background: var(--bg-surface); border: 1px solid var(--neon-blue); color: var(--neon-blue);">EN</button>
+          <button id="miTestMic" type="button"
+            style="padding: 6px 12px; font-size: 0.75rem; min-width: auto; background: rgba(255,255,255,0.02);">Test</button>
+        </div>
+      </div>
+
+      <!-- Waveform Visualizer -->
+      <div class="visualizer" id="miVisualizer">
+        <div class="bar"></div>
+        <div class="bar"></div>
+        <div class="bar"></div>
+        <div class="bar"></div>
+        <div class="bar"></div>
+        <div class="bar"></div>
+        <div class="bar"></div>
+      </div>
+
+      <div class="chat-container" id="miChat">
+        <!-- Chat bubbles appear here -->
+      </div>
+
+      <div class="input-group" style="padding: 10px 0;">
+        <button class="primary" id="miRecord" type="button">
+          🎙️ Record Entry
+        </button>
+      </div>
+
+      <div class="actions" style="margin-top: 12px;">
+        <button id="miYes" type="button" disabled
+          style="color: var(--neon-green); border-color: rgba(16,185,129,0.3);">CONFIRM</button>
+        <button id="miNo" type="button" disabled
+          style="color: var(--neon-red); border-color: rgba(239,68,68,0.3);">RETRY</button>
+        <button id="miManual" type="button" style="background: rgba(255,255,255,0.02); font-size: 0.8rem;">Manual
+          Input</button>
+        <button id="miEditDraft" type="button" style="background: rgba(0,242,234,0.06); border:1px solid rgba(0,242,234,0.4); font-size: 0.8rem;">Edit
+          Draft</button>
+      </div>
+
+      <div class="warn" id="miWarn" style="display:none;"></div>
+      <div class="ok" id="miOk" style="display:none;"></div>
+    </div>
+
+    <!-- Entries -->
+    <div class="card">
+      <div class="sectionTitle">
+        <h2>Entries</h2>
+        <span class="chip" id="miCountChip">0</span>
+      </div>
+      <div class="miEntriesGrid" id="miEntries">
+        <!-- Entries injected here -->
+      </div>
+    </div>
+
+    <!-- Sign Off -->
+    <div class="card">
+      <div class="sectionTitle">
+        <h2>Sign Off</h2>
+      </div>
+
+      <div class="input-group">
+        <label>Supervisor Signature</label>
+        <canvas id="miSigCanvas" height="180" width="600"></canvas>
+      </div>
+
+      <div class="actions">
+        <button class="danger" id="miSigClear" type="button">Clear Signature</button>
+        <button class="primary" id="miComplete" type="button">Complete & Export Excel</button>
+      </div>
+    </div>
+  </main>
+
+  <!-- External Deps -->
+  <script crossorigin="anonymous" src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <!-- Main Script -->
+  <script src="script.js"></script>
+</body>
+
+</html>
