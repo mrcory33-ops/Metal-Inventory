@@ -218,6 +218,7 @@ const E = (() => {
     miNewSession: byId('miNewSession'),
     miChat: byId('miChat'),
     miRecord: byId('miRecord'),
+    miFlowMode: byId('miFlowMode'),
     miYes: byId('miYes'),
     miNo: byId('miNo'),
     miManual: byId('miManual'),
@@ -232,6 +233,8 @@ const E = (() => {
     miTestMic: byId('miTestMic'),
     miTestStatus: byId('miTestStatus'),
     miLangToggle: byId('miLangToggle'),
+    miVoiceSelect: byId('miVoiceSelect'),
+    miEngineDash: byId('miEngineDash'),
     pageMetalInventory: byId('pageMetalInventory')
   };
 })();
@@ -264,14 +267,140 @@ const MetalInventory = (() => {
     pausedAt: "",
     completedAt: "",
     entries: [], // array of entry
-    draft: { step: "idle", location: "", part: "", partKey: "", thick: null, sheetThickSource: "", type: "", desc: "", stackHeight: null, paper: null },
+    draft: {
+      step: "idle",
+      flowMode: "standard", // "standard" | "po_lookup" | "sheet_override"
+      location: "",
+      part: "",
+      partKey: "",
+      po: "", // NEW: for PO lookup flow
+      gauge: null, // NEW: for PO lookup flow (material gauge)
+      qty: null, // NEW: for sheet override flow (direct count)
+      thick: null,
+      sheetThickSource: "",
+      type: "",
+      desc: "",
+      stackHeight: null,
+      paper: null
+    },
     pendingConfirm: null, // { kind, text }
     sigDataUrl: "",
     listening: false,
-    lang: "en" // "en" | "es"
+    lang: "en", // "en" | "es"
+    selectedVoice: "af_heart" // Kokoro voice selection
   };
 
   const PAPER_THICK = 0.004;
+
+  // Phonetic Alphabet Mapping (NATO)
+  const PHONETIC_MAP = {
+    alpha: 'A', bravo: 'B', charlie: 'C', delta: 'D',
+    echo: 'E', foxtrot: 'F', golf: 'G', hotel: 'H',
+    india: 'I', juliet: 'J', kilo: 'K', lima: 'L',
+    mike: 'M', november: 'N', oscar: 'O', papa: 'P',
+    quebec: 'Q', romeo: 'R', sierra: 'S', tango: 'T',
+    uniform: 'U', victor: 'V', whiskey: 'W', xray: 'X',
+    yankee: 'Y', zulu: 'Z'
+  };
+
+  const convertPhonetic = (text) => {
+    let result = text.toLowerCase();
+    for (const [word, letter] of Object.entries(PHONETIC_MAP)) {
+      result = result.replace(new RegExp(`\\b${word}\\b`, 'gi'), letter);
+    }
+    return result.toUpperCase().replace(/\s+/g, '');
+  };
+
+  // Input Validation (Noise Gating)
+  const validateInput = (text, expectedType) => {
+    const clean = text.trim();
+
+    switch (expectedType) {
+      case "location": {
+        // Convert phonetic first: "Echo 5" → "E5"
+        const converted = convertPhonetic(clean);
+        // Only accept: letter + number (A1, B2, E5)
+        const match = converted.match(/^([A-Z])(\d+)$/);
+        return match ? match[0] : null;
+      }
+
+      case "part": {
+        // Only accept: 4 digits
+        const digits = clean.replace(/\D/g, '');
+        return digits.length === 4 ? digits : null;
+      }
+
+      case "po": {
+        // Only accept: 5 digits
+        const digits = clean.replace(/\D/g, '');
+        return digits.length === 5 ? digits : null;
+      }
+
+      case "number": {
+        // Handle phrases like "3 sheets", "seven pieces", "5", etc.
+        // Remove common words
+        let numText = clean.replace(/\b(sheets?|pieces?|items?|units?|count|total|hojas?|piezas?)\b/gi, '').trim();
+
+        // Try to parse as number
+        const num = parseFloat(numText.replace(/[^\d.]/g, ''));
+        if (Number.isFinite(num) && num > 0) return num;
+
+        // Try word-to-number conversion for common numbers
+        const wordMap = {
+          'zero': 0, 'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
+          'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10,
+          'cero': 0, 'uno': 1, 'dos': 2, 'tres': 3, 'cuatro': 4, 'cinco': 5,
+          'seis': 6, 'siete': 7, 'ocho': 8, 'nueve': 9, 'diez': 10
+        };
+
+        const lowText = numText.toLowerCase();
+        if (wordMap[lowText] !== undefined) return wordMap[lowText];
+
+        return null;
+      }
+
+      case "thickness": {
+        // Must be < 6.0 inches
+        const num = parseFloat(clean.replace(/[^\d.]/g, ''));
+        return (Number.isFinite(num) && num > 0 && num < 6.0) ? num : null;
+      }
+
+      case "yesno": {
+        const low = clean.toLowerCase();
+        // Multilingual yes/no (English + Spanish)
+        if (/^(yes|yeah|yep|yup|si|sí|claro|bueno|correct)$/i.test(low)) return true;
+        if (/^(no|nope|nah|nada|nunca|negative)$/i.test(low)) return false;
+        return null;
+      }
+
+      case "gauge": {
+        // Handle "16 gauge", "14 ga", "point 060", etc.
+        let valText = clean.replace(/\b(gauge|ga|calibre)\b/gi, '').trim();
+
+        // Try direct decimal parse first
+        const num = parseFloat(valText.replace(/[^\d.]/g, ''));
+
+        // If it looks like a whole number gauge (e.g. 16, 14, 10)
+        if (Number.isInteger(num) && num >= 3 && num <= 30) {
+          // Standard Steel Gauge Mapping
+          const gaugeMap = {
+            10: 0.1345, 11: 0.1196, 12: 0.1046, 13: 0.0897,
+            14: 0.0747, 15: 0.0673, 16: 0.0598, 17: 0.0538,
+            18: 0.0478, 19: 0.0418, 20: 0.0359, 21: 0.0329,
+            22: 0.0299, 23: 0.0269, 24: 0.0239, 25: 0.0209,
+            26: 0.0179, 27: 0.0164, 28: 0.0149
+          };
+          if (gaugeMap[num]) return gaugeMap[num];
+        }
+
+        // Return decimal if valid
+        return (Number.isFinite(num) && num > 0 && num <= 1.0) ? num : null;
+      }
+
+      default:
+        return clean || null;
+    }
+  };
 
   const normPart = (v) => String(v || "").toUpperCase().replace(/[^A-Z0-9]/g, "").trim();
 
@@ -461,13 +590,132 @@ const MetalInventory = (() => {
     window.speechSynthesis.onvoiceschanged = () => { _cachedVoice = null; getVoice(); };
   }
 
-  /* TTS: Browser SpeechSynthesis Only (Backend Removed) */
-  const speakAsync = async (text) => {
-    // Fallback: Browser SpeechSynthesis
+  /* TTS: Kokoro Backend with Browser Fallback */
+  // Cloud Run Kokoro TTS Backend
+  const KOKORO_TTS_URL = "https://kokoro-tts-720128095536.us-central1.run.app";
+
+  // Get selected voice from dropdown (defaults to af_heart)
+  const getKokoroVoice = () => {
+    return state.selectedVoice || 'af_heart';
+  };
+
+  const ttsState = {
+    activeAudio: null,
+    activeUrl: "",
+    cancel: null,
+    lastEndedAt: 0
+  };
+
+  const setEngineDash = (engine, voiceLabel = "") => {
+    if (!E.miEngineDash) return;
+    const label = voiceLabel ? `${engine} (${voiceLabel})` : engine;
+    E.miEngineDash.textContent = label;
+    if (engine === "KOKORO") {
+      E.miEngineDash.style.color = "var(--neon-cyan)";
+    } else if (engine === "BROWSER") {
+      E.miEngineDash.style.color = "var(--neon-amber)";
+    } else {
+      E.miEngineDash.style.color = "var(--neon-amber)";
+    }
+  };
+
+  const clearKokoroAudio = () => {
+    const audio = ttsState.activeAudio;
+    if (!audio) return;
+    audio.onended = null;
+    audio.onerror = null;
+    try {
+      audio.pause();
+      audio.currentTime = 0;
+    } catch { }
+    if (ttsState.activeUrl) {
+      URL.revokeObjectURL(ttsState.activeUrl);
+    }
+    ttsState.activeAudio = null;
+    ttsState.activeUrl = "";
+  };
+
+  const stopTTS = () => {
+    if (typeof ttsState.cancel === "function") {
+      ttsState.cancel();
+    }
+    ttsRunId += 1;
+    ttsState.lastEndedAt = Date.now();
+    clearKokoroAudio();
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+    }
+  };
+
+  const TTS_LISTEN_GAP_MS = 150;
+  let ttsChain = Promise.resolve();
+  let ttsRunId = 0;
+
+  const speakWithKokoro = async (text, voiceOverride, runId) => {
+    if (!KOKORO_TTS_URL || !text) return false;
+
+    try {
+      const voice = voiceOverride || getKokoroVoice();
+      const url = `${KOKORO_TTS_URL}/tts?text=${encodeURIComponent(text)}&voice=${encodeURIComponent(voice)}&ts=${Date.now()}`;
+      const response = await fetch(url, { method: 'GET', cache: 'no-store' });
+
+      if (!response.ok) {
+        console.warn('Kokoro TTS request failed:', response.status);
+        return false;
+      }
+
+      const audioBlob = await response.blob();
+      const audioUrl = URL.createObjectURL(audioBlob);
+      if (runId && runId !== ttsRunId) {
+        URL.revokeObjectURL(audioUrl);
+        return false;
+      }
+      clearKokoroAudio();
+      const audio = new Audio(audioUrl);
+      audio.preload = "auto";
+      audio.volume = 1.0;
+      ttsState.activeAudio = audio;
+      ttsState.activeUrl = audioUrl;
+      timers.startTTS();
+
+      return new Promise((resolve) => {
+        let settled = false;
+        const finalize = (ok) => {
+          if (settled) return;
+          settled = true;
+          ttsState.cancel = null;
+          ttsState.lastEndedAt = Date.now();
+          timers.endTTS();
+          clearKokoroAudio();
+          resolve(ok);
+        };
+        ttsState.cancel = () => finalize(false);
+        audio.onended = () => finalize(true);
+        audio.onerror = () => finalize(false);
+        const playPromise = audio.play();
+        if (playPromise && typeof playPromise.catch === "function") {
+          playPromise.catch(() => finalize(false));
+        }
+      });
+    } catch (err) {
+      console.warn('Kokoro TTS error:', err);
+      return false;
+    }
+  };
+
+  const speakWithBrowser = async (text) => {
     return new Promise((resolve) => {
       try {
         if (!("speechSynthesis" in window)) { resolve(); return; }
-        window.speechSynthesis.cancel();
+        let settled = false;
+        const finalize = () => {
+          if (settled) return;
+          settled = true;
+          ttsState.cancel = null;
+          ttsState.lastEndedAt = Date.now();
+          resolve();
+        };
+        ttsState.cancel = finalize;
         const u = new SpeechSynthesisUtterance(String(text || ""));
         const useLang = state.lang || "en";
         const v = getVoice(useLang);
@@ -476,32 +724,103 @@ const MetalInventory = (() => {
         u.rate = 0.95;
         u.pitch = 1.0;
         u.volume = 1.0;
-        u.onend = () => resolve();
-        u.onerror = (e) => resolve();
+        u.onend = () => finalize();
+        u.onerror = () => finalize();
         window.speechSynthesis.speak(u);
         // Safety timeout
-        setTimeout(resolve, (text.length * 100) + 1000);
-      } catch (e) { resolve(); }
+        setTimeout(finalize, (text.length * 100) + 1000);
+      } catch (e) {
+        ttsState.cancel = null;
+        resolve();
+      }
     });
+  };
+
+  const speakAsync = (text, opts = {}) => {
+    if (!text) return Promise.resolve(null);
+    const { interrupt = true } = opts;
+    if (interrupt) {
+      stopTTS();
+      ttsChain = Promise.resolve();
+    }
+    const run = async () => {
+      const runId = ++ttsRunId;
+      if (KOKORO_TTS_URL) {
+        const voice = getKokoroVoice();
+        const kokoroSuccess = await speakWithKokoro(text, voice, runId);
+        if (runId !== ttsRunId) return null;
+        if (kokoroSuccess) {
+          setEngineDash("KOKORO", voice);
+          return "KOKORO";
+        }
+        console.log('Kokoro unavailable, using browser TTS');
+      }
+      if (runId !== ttsRunId) return null;
+      setEngineDash("BROWSER");
+      await speakWithBrowser(text);
+      return "BROWSER";
+    };
+    ttsChain = ttsChain.then(run, run);
+    return ttsChain;
   };
 
   // Backwards compat shim if needed, or just redirect
   const speak = (text) => speakAsync(text);
 
+  // Performance Timers
+  const timers = {
+    stepStart: 0,
+    ttsStart: 0,
+    listenStart: 0,
+
+    startStep: (stepName) => {
+      timers.stepStart = performance.now();
+      console.log(`⏱️ [${stepName}] Step started`);
+    },
+
+    startTTS: () => {
+      timers.ttsStart = performance.now();
+    },
+
+    endTTS: () => {
+      const duration = performance.now() - timers.ttsStart;
+      console.log(`🔊 TTS duration: ${duration.toFixed(0)}ms`);
+      return duration;
+    },
+
+    startListen: () => {
+      timers.listenStart = performance.now();
+    },
+
+    endListen: (result) => {
+      const duration = performance.now() - timers.listenStart;
+      console.log(`👂 Listen duration: ${duration.toFixed(0)}ms (Result: ${result ? 'YES' : 'NO'})`);
+      return duration;
+    },
+
+    endStep: (stepName) => {
+      const duration = performance.now() - timers.stepStart;
+      console.log(`⏱️ [${stepName}] Total: ${duration.toFixed(0)}ms`);
+      return duration;
+    }
+  };
+
   const Speech = (() => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     const supported = !!SR;
 
-    const listenOnce = ({ promptText, lang = "en-US", expectYesNo = false, timeoutMs = 15000 } = {}) => new Promise((resolve) => {
+    const listenOnce = ({ promptText, lang = "en-US", expectYesNo = false, timeoutMs = 45000 } = {}) => new Promise((resolve) => {
       if (!supported) {
         resolve({ ok: false, text: "", error: "SpeechRecognition not supported" });
         return;
       }
       const rec = new SR();
       rec.lang = lang;
+      rec.continuous = false; // Single utterance mode for better control
       rec.interimResults = false;
-      rec.maxAlternatives = 1;
+      rec.maxAlternatives = 3; // Get more alternatives for better accuracy
       let done = false;
+      let hasReceivedResult = false;
 
       const finish = (res) => {
         if (done) return;
@@ -513,11 +832,53 @@ const MetalInventory = (() => {
       // Longer timeout for industrial env
       const timer = setTimeout(() => finish({ ok: false, text: "", error: "timeout" }), timeoutMs);
 
+      rec.onstart = () => {
+        console.log("🎤 Speech recognition started");
+        // Play subtle beep to indicate listening
+        const beep = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBSuBzvLZiTYIGGS57OihUBELTKXh8bllHAU2jdXvzn0pBSh+zPDajzsKFGCz6OyrWBQLSKDe8sFuIgYugc/y2Ik2CBhku+zooVARC0yl4fG5ZRwFNo3V7859KQUofsz');
+        beep.volume = 0.3;
+        beep.play().catch(() => { });
+      };
+
+      rec.onspeechstart = () => {
+        console.log("🗣️ Speech detected");
+        hasReceivedResult = false;
+      };
+
+      rec.onspeechend = () => {
+        console.log("🔇 Speech ended");
+      };
+
       rec.onresult = (e) => {
+        if (hasReceivedResult) return; // Prevent duplicate results
+        hasReceivedResult = true;
+
         clearTimeout(timer);
-        const t = e && e.results && e.results[0] && e.results[0][0] && e.results[0][0].transcript
-          ? String(e.results[0][0].transcript).trim()
-          : "";
+
+        // Get best result with highest confidence
+        let bestTranscript = "";
+        let bestConfidence = 0;
+
+        if (e && e.results && e.results[0]) {
+          for (let i = 0; i < e.results[0].length; i++) {
+            const alt = e.results[0][i];
+            if (alt.confidence > bestConfidence) {
+              bestConfidence = alt.confidence;
+              bestTranscript = alt.transcript;
+            }
+          }
+        }
+
+        const t = bestTranscript ? String(bestTranscript).trim() : "";
+        console.log(`✅ Speech result: "${t}" (confidence: ${(bestConfidence * 100).toFixed(1)}%)`);
+
+        // Reject low confidence results
+        if (bestConfidence < 0.5 && t) {
+          console.warn("⚠️ Low confidence, rejecting");
+          finish({ ok: false, text: t, raw: t, error: "low_confidence" });
+          return;
+        }
+
         if (expectYesNo) {
           const low = t.toLowerCase();
           // Broaden yes/no matching - significantly more natural options
@@ -531,24 +892,36 @@ const MetalInventory = (() => {
         }
         finish({ ok: !!t, text: t, raw: t, error: t ? "" : "empty" });
       };
+
       rec.onerror = (e) => {
         clearTimeout(timer);
+        console.warn("❌ Speech error event:", e.error, e);
         if (e.error === "no-speech") {
           // benign, just timeout
           finish({ ok: false, text: "", error: "timeout" });
           return;
         }
-        console.warn("Speech error:", e.error);
+        if (e.error === "aborted") {
+          // User stopped or browser interrupted
+          finish({ ok: false, text: "", error: "aborted" });
+          return;
+        }
         finish({ ok: false, text: "", error: e.error || "error" });
       };
-      rec.onend = () => { if (!done) finish({ ok: false, text: "", error: "end_gap" }); };
+
+      rec.onend = () => {
+        if (!done) {
+          console.log("🔚 Recognition ended without result");
+          finish({ ok: false, text: "", error: "end_gap" });
+        }
+      };
 
       try {
         if (promptText) chat.pushSys(promptText);
         rec.start();
       } catch (e) {
         clearTimeout(timer);
-        console.error("Speech start failed:", e);
+        console.error("💥 Speech start failed:", e);
         finish({ ok: false, text: "", error: "start_failed: " + (e.message || String(e)) });
       }
     });
@@ -715,6 +1088,10 @@ const MetalInventory = (() => {
   const listenOnce = async (opts) => {
     setListening(true);
     try {
+      const sinceTts = Date.now() - (ttsState.lastEndedAt || 0);
+      if (ttsState.lastEndedAt && sinceTts < TTS_LISTEN_GAP_MS) {
+        await new Promise(r => setTimeout(r, TTS_LISTEN_GAP_MS - sinceTts));
+      }
       return await Speech.listenOnce(opts);
     } finally {
       setListening(false);
@@ -885,18 +1262,25 @@ const MetalInventory = (() => {
 
     return new Promise((resolve) => {
       let resolved = false;
+      const BUTTON_TIMEOUT_MS = 30000; // 30 second escape hatch per user preference
+
       const finish = (val) => {
         if (resolved) return;
         resolved = true;
+        clearTimeout(escapeTimer);
         cleanup();
         state.pendingConfirm = null;
         persist();
         setButtons("idle");
-        resolve({ answer: val, raw: "", via: "button" });
+        resolve({ answer: val, raw: "", via: val ? "button" : "timeout" });
       };
 
       const yes = () => finish("yes");
       const no = () => finish("no");
+      const escapeTimer = setTimeout(() => {
+        chat.pushSys(state.lang === "es" ? "Tiempo agotado. Reintentar." : "Timed out. Please retry.");
+        finish(null);
+      }, BUTTON_TIMEOUT_MS);
 
       const cleanup = () => {
         E.miYes.removeEventListener("click", yes);
@@ -1019,30 +1403,36 @@ const MetalInventory = (() => {
     const map = dbMap || {};
 
     const P = {
-      readyLoc: isEs ? "Ubicacion?" : "Location?",
-      paused: isEs ? "Sesion pausada." : "Session paused.",
+      // Brief Mode Prompts (Requirement 5)
+      readyLoc: isEs ? "Ubicación?" : "Location?",
+      paused: isEs ? "Pausado." : "Paused.",
+      resuming: isEs ? "Continuando." : "Resuming.",
       captured: isEs ? "[C]" : "[C]",
-      noInput: isEs ? "Reintentar." : "Retrying.",
-      partNum: isEs ? "Numero de parte?" : "Part number?",
+      noInput: isEs ? "Repetir." : "Retry.",
+      partNum: isEs ? "Parte?" : "Part?",
+      po: isEs ? "PO?" : "PO?",
+      gauge: isEs ? "Calibre?" : "Gauge?",
+      qty: isEs ? "Cantidad?" : "Count?",
       thickness: isEs ? "Espesor?" : "Thickness?",
       paper: isEs ? "Papel?" : "Paper?",
-      sheetThick: isEs ? "Espesor de la hoja?" : "Sheet thickness?",
-      calcErr: isEs ? "Error de calculo." : "Calculation error.",
+      sheetThick: isEs ? "Hoja?" : "Sheet?",
+      calcErr: isEs ? "Error." : "Error.",
       correct: isEs ? "Correcto?" : "Correct?",
-      saved: isEs ? "Guardado." : "Saved.",
-      corrected: isEs ? "Corregido." : "Corrected.",
-      whatWrong: isEs ? "Que estuvo mal? Ubicacion, parte, espesor o papel." : "What was wrong? Say location, part, thickness, or paper.",
-      voiceUnclear: isEs ? "Voz no clara. Use botones." : "Voice unclear. Use buttons.",
-      needField: isEs ? "Diga el campo o el valor correcto." : "Say the field or the corrected value.",
+      saved: isEs ? "Listo." : "Got it.",
+      corrected: isEs ? "Corregido." : "Fixed.",
+      whatWrong: isEs ? "Qué cambiar?" : "What's wrong?",
+      voiceUnclear: isEs ? "Toca botón." : "Tap button.",
+      needField: isEs ? "Diga campo." : "Say field.",
+      flowChoice: isEs ? "PO o conteo?" : "PO or count?",
       readback: (draft, qty) => {
         const paperText = draft.paper ? (isEs ? "con papel" : "paper") : (isEs ? "sin papel" : "no paper");
         const thickText = Number.isFinite(draft.stackHeight) ? draft.stackHeight : "";
         const base = isEs
-          ? `Ubicacion ${draft.location}, parte ${draft.part}, espesor ${thickText} pulgadas, ${paperText}.`
-          : `Location ${draft.location}, part ${draft.part}, thickness ${thickText} inches, ${paperText}.`;
-        const qtyText = isEs ? `Cantidad ${qty}.` : `Calculated ${qty} pieces.`;
+          ? `${draft.location}, ${draft.part || draft.po}, ${thickText}, ${paperText}.`
+          : `${draft.location}, ${draft.part || draft.po}, ${thickText}, ${paperText}.`;
+        const qtyText = isEs ? `${qty}.` : `${qty} pieces.`;
         const sheetText = draft.sheetThickSource === "manual"
-          ? (isEs ? `Espesor de hoja ${draft.thick} pulgadas.` : `Sheet thickness ${draft.thick} inches.`)
+          ? (isEs ? `Hoja ${draft.thick}.` : `Sheet ${draft.thick}.`)
           : "";
         return `${base} ${sheetText} ${qtyText}`.trim();
       }
@@ -1050,10 +1440,7 @@ const MetalInventory = (() => {
 
     const isStop = (text) => /\b(stop|cancel|exit|finish|done|pause|alto|salir|terminar)\b/i.test(String(text || ""));
     const paperFromText = (text) => {
-      const low = String(text || "").toLowerCase();
-      if (/\b(no|nope|nah|sin)\b/.test(low)) return false;
-      if (/\b(yes|yeah|yep|yup|paper|si)\b/.test(low)) return true;
-      return null;
+      return validateInput(text, "yesno");
     };
 
     const announceDraft = (slots) => {
@@ -1130,12 +1517,25 @@ const MetalInventory = (() => {
       return changed;
     };
 
-    const listenFor = async (promptText, { timeoutMs = 30000 } = {}) => {
+    const listenFor = async (promptText, { timeoutMs = 45000 } = {}) => {
+      // Visual feedback: activate listening visualizer immediately
+      const viz = document.getElementById('miVisualizer');
+      if (viz) viz.classList.add('active');
+
+      stopTTS();
       if (promptText) {
         chat.pushSys(promptText);
         await speakAsync(promptText);
+        await new Promise(r => setTimeout(r, TTS_LISTEN_GAP_MS));
       }
+
+      timers.startListen();
       const r = await listenOnce({ timeoutMs, lang: langCode });
+      timers.endListen(r.ok);
+
+      // Hide visualizer when done listening
+      if (viz) viz.classList.remove('active');
+
       if (!r.ok) {
         setWarn(P.noInput);
         return null;
@@ -1151,36 +1551,45 @@ const MetalInventory = (() => {
     };
 
     const askLocation = async () => {
-      const r = await listenFor(P.readyLoc, { timeoutMs: 30000 });
+      const r = await listenFor(P.readyLoc, { timeoutMs: 45000 });
       if (!r) return false;
-      const slots = extractSlots(r.text, "location");
-      announceDraft(slots);
-      if (!slots.location) {
+
+      // Use validateInput for phonetic mapping and strict format
+      const validated = validateInput(r.text, "location");
+      if (!validated) {
         setWarn(P.noInput);
         return false;
       }
-      applySlotsToDraft(slots);
+
+      d.location = validated;
+      chat.pushSys(`${P.captured} Loc:${d.location}`);
       persist();
       return true;
     };
 
     const askPart = async () => {
-      const prompt = isEs ? `(Ubic: ${d.location}) ${P.partNum}` : `(Loc: ${d.location}) ${P.partNum}`;
-      const r = await listenFor(prompt, { timeoutMs: 30000 });
+      // User request: remove location context from prompt
+      const prompt = isEs ? P.partNum : P.partNum;
+      const r = await listenFor(prompt, { timeoutMs: 45000 });
       if (!r) return false;
-      const slots = extractSlots(r.text, "part");
-      announceDraft(slots);
-      if (!slots.part && !slots.partKey) {
+
+      // Use validateInput for strict 4-digit validation
+      const validated = validateInput(r.text, "part");
+      if (!validated) {
         setWarn(P.noInput);
         return false;
       }
-      applySlotsToDraft(slots);
+
+      d.part = validated;
+      d.partKey = normPart(validated);
+      chat.pushSys(`${P.captured} Part:${d.part}`);
+      applyPartRecord(d.partKey);
       persist();
       return true;
     };
 
     const askSheetThickness = async () => {
-      const r = await listenFor(P.sheetThick, { timeoutMs: 20000 });
+      const r = await listenFor(P.sheetThick, { timeoutMs: 45000 });
       if (!r) return false;
       const slots = extractSlots(r.text, "sheet");
       if (slots.thick) {
@@ -1206,7 +1615,7 @@ const MetalInventory = (() => {
     };
 
     const askThickness = async () => {
-      const r = await listenFor(P.thickness, { timeoutMs: 30000 });
+      const r = await listenFor(P.thickness, { timeoutMs: 45000 });
       if (!r) return false;
       const slots = extractSlots(r.text, "stack");
       announceDraft(slots);
@@ -1229,7 +1638,7 @@ const MetalInventory = (() => {
     };
 
     const askPaper = async () => {
-      const r = await listenFor(P.paper, { timeoutMs: 20000 });
+      const r = await listenFor(P.paper, { timeoutMs: 45000 });
       if (!r) return false;
       const slots = extractSlots(r.text, "paper");
       if (slots.paper !== undefined && slots.paper !== null) d.paper = slots.paper;
@@ -1242,6 +1651,49 @@ const MetalInventory = (() => {
         return false;
       }
       announceDraft({ paper: d.paper });
+      persist();
+      return true;
+    };
+
+    // NEW: Manual Entry Flow Functions
+    const askPO = async () => {
+      const r = await listenFor(P.po, { timeoutMs: 45000 });
+      if (!r) return false;
+      const validated = validateInput(r.text, "po");
+      if (!validated) {
+        setWarn(P.noInput);
+        return false;
+      }
+      d.po = validated;
+      chat.pushSys(`${P.captured} PO:${d.po}`);
+      persist();
+      return true;
+    };
+
+    const askGauge = async () => {
+      const r = await listenFor(P.gauge, { timeoutMs: 45000 });
+      if (!r) return false;
+      const validated = validateInput(r.text, "gauge");
+      if (!validated || validated < 0.001 || validated > 1.0) {
+        setWarn(P.noInput);
+        return false;
+      }
+      d.gauge = validated;
+      chat.pushSys(`${P.captured} Gauge:${d.gauge}`);
+      persist();
+      return true;
+    };
+
+    const askQty = async () => {
+      const r = await listenFor(P.qty, { timeoutMs: 45000 });
+      if (!r) return false;
+      const validated = validateInput(r.text, "number");
+      if (!validated || validated < 1 || validated > 9999 || !Number.isInteger(validated)) {
+        setWarn(P.noInput);
+        return false;
+      }
+      d.qty = Math.floor(validated);
+      chat.pushSys(`${P.captured} Qty:${d.qty}`);
       persist();
       return true;
     };
@@ -1339,32 +1791,258 @@ const MetalInventory = (() => {
       chat.pushSys(P.needField);
     };
 
-    // Flow
+    // Flow with retry logic
+    const MAX_RETRIES = 2;
+
+    const tryAsk = async (askFn, fieldName, retryCount = 0) => {
+      timers.startStep(fieldName);
+      const success = await askFn();
+      timers.endStep(fieldName);
+
+      if (success) return true;
+      if (retryCount < MAX_RETRIES) {
+        chat.pushSys(isEs ? `Reintentar ${fieldName}.` : `Retrying ${fieldName}.`);
+        await speakAsync(isEs ? "Reintentar." : "Retrying.");
+        return tryAsk(askFn, fieldName, retryCount + 1);
+      }
+      chat.pushSys(isEs ? "Use entrada manual." : "Use Manual Input button.");
+      return false;
+    };
+
+    // === BRANCHING FLOW LOGIC ===
+    const flowMode = d.flowMode || "standard";
+
+    // Step 1: Location (all flows)
     if (!d.location) {
-      if (await askLocation()) return doStep();
+      if (await tryAsk(askLocation, "location")) return doStep();
       return;
     }
 
+    // === FLOW MODE: SHEET OVERRIDE ===
+    if (flowMode === "sheet_override") {
+      // Step 2: Part# OR PO#
+      if (!d.part && !d.po) {
+        chat.pushSys(isEs ? "Parte o PO?" : "Part or PO?");
+        const r = await listenFor(isEs ? "Parte o PO?" : "Part or PO?", { timeoutMs: 45000 });
+        if (!r) return;
+
+        // Try part first (4 digits)
+        const partValidated = validateInput(r.text, "part");
+        if (partValidated) {
+          d.part = partValidated;
+          d.partKey = normPart(partValidated);
+          chat.pushSys(`${P.captured} Part:${d.part}`);
+          applyPartRecord(d.partKey);
+        } else {
+          // Try PO (5 digits)
+          const poValidated = validateInput(r.text, "po");
+          if (poValidated) {
+            d.po = poValidated;
+            chat.pushSys(`${P.captured} PO:${d.po}`);
+          } else {
+            setWarn(P.noInput);
+            return;
+          }
+        }
+        persist();
+        return doStep();
+      }
+
+      // Step 3: Sheet count
+      if (!d.qty) {
+        if (await tryAsk(askQty, "count")) return doStep();
+        return;
+      }
+
+      // Confirm and save
+      const readback = isEs
+        ? `${d.location}, ${d.part || d.po}, ${d.qty} hojas.`
+        : `${d.location}, ${d.part || d.po}, ${d.qty} sheets.`;
+
+      const confirmRes = await confirmPrompt({
+        text: readback,
+        lang: langCode,
+        correctText: P.correct,
+        timeoutMs: 25000,
+        voiceFailText: P.voiceUnclear
+      });
+
+      if (!confirmRes || !confirmRes.answer) return;
+
+      if (confirmRes.answer === "yes") {
+        const entry = {
+          createdAt: nowStamp(),
+          location: d.location,
+          part: d.part || "",
+          po: d.po || "",
+          partKey: d.partKey || "",
+          materialType: d.type || "",
+          description: d.desc || "",
+          sheetThick: null,
+          stackHeight: null,
+          paper: null,
+          paperThick: 0,
+          effectiveThick: null,
+          qty: d.qty,
+          remainder: 0,
+          flowMode: "sheet_override"
+        };
+        state.entries = Array.isArray(state.entries) ? state.entries : [];
+        state.entries.push(entry);
+
+        resetDraft();
+        persist();
+        renderEntries();
+        setButtons("idle");
+
+        chat.pushSys(P.saved);
+        return doStep();
+      }
+
+      await handleCorrection(confirmRes.raw || "");
+      return;
+    }
+
+    // === FLOW MODE: PO LOOKUP ===
+    if (flowMode === "po_lookup") {
+      // Step 2: PO number
+      if (!d.po) {
+        if (await tryAsk(askPO, "PO")) return doStep();
+        return;
+      }
+
+      // Step 3: Material gauge
+      if (!d.gauge) {
+        if (await tryAsk(askGauge, "gauge")) return doStep();
+        return;
+      }
+
+      // Step 4: Thickness OR Sheet qty (user choice)
+      if (!d.stackHeight && !d.qty) {
+        chat.pushSys(isEs ? "Espesor o cantidad?" : "Thickness or count?");
+        const r = await listenFor(isEs ? "Espesor o cantidad?" : "Thickness or count?", { timeoutMs: 45000 });
+        if (!r) return;
+
+        const thickValidated = validateInput(r.text, "thickness");
+        if (thickValidated) {
+          d.stackHeight = thickValidated;
+          chat.pushSys(`${P.captured} Thick:${d.stackHeight}`);
+          persist();
+          return doStep();
+        }
+
+        const qtyValidated = validateInput(r.text, "number");
+        if (qtyValidated && qtyValidated >= 1 && qtyValidated <= 9999) {
+          d.qty = Math.floor(qtyValidated);
+          chat.pushSys(`${P.captured} Qty:${d.qty}`);
+          persist();
+          return doStep();
+        }
+
+        setWarn(P.noInput);
+        return;
+      }
+
+      // If thickness was provided, ask paper
+      if (d.stackHeight && d.paper === null) {
+        if (await tryAsk(askPaper, "paper")) return doStep();
+        return;
+      }
+
+      // Calculate or use direct qty
+      let qty, effective, remainder;
+      if (d.qty) {
+        qty = d.qty;
+        effective = null;
+        remainder = 0;
+      } else {
+        // Use gauge as sheet thickness
+        d.thick = d.gauge;
+        const calc = calcQty({ stackHeight: d.stackHeight, sheetThick: d.thick, paper: d.paper });
+        qty = calc.qty;
+        effective = calc.effective;
+        remainder = calc.remainder;
+        if (qty === null) {
+          setWarn(P.calcErr);
+          await speakAsync(P.calcErr);
+          return;
+        }
+      }
+
+      const readback = isEs
+        ? `${d.location}, PO ${d.po}, calibre ${d.gauge}, ${qty} hojas.`
+        : `${d.location}, PO ${d.po}, gauge ${d.gauge}, ${qty} sheets.`;
+
+      const confirmRes = await confirmPrompt({
+        text: readback,
+        lang: langCode,
+        correctText: P.correct,
+        timeoutMs: 25000,
+        voiceFailText: P.voiceUnclear
+      });
+
+      if (!confirmRes || !confirmRes.answer) return;
+
+      if (confirmRes.answer === "yes") {
+        const entry = {
+          createdAt: nowStamp(),
+          location: d.location,
+          part: "",
+          po: d.po,
+          partKey: "",
+          materialType: "",
+          description: "",
+          sheetThick: d.thick || d.gauge,
+          stackHeight: d.stackHeight || null,
+          paper: d.paper,
+          paperThick: d.paper ? PAPER_THICK : 0,
+          effectiveThick: effective,
+          qty,
+          remainder,
+          flowMode: "po_lookup"
+        };
+        state.entries = Array.isArray(state.entries) ? state.entries : [];
+        state.entries.push(entry);
+
+        resetDraft();
+        persist();
+        renderEntries();
+        setButtons("idle");
+
+        chat.pushSys(P.saved);
+        return doStep();
+      }
+
+      await handleCorrection(confirmRes.raw || "");
+      return;
+    }
+
+    // === FLOW MODE: STANDARD ===
+    // Step 2: Part number
     if (!d.part) {
-      if (await askPart()) return doStep();
+      if (await tryAsk(askPart, "part")) return doStep();
       return;
     }
 
+    // Step 3: Stack thickness
     if (!d.stackHeight) {
-      if (await askThickness()) return doStep();
+      if (await tryAsk(askThickness, "thickness")) return doStep();
       return;
     }
 
+    // Step 4: Paper
     if (d.paper === null) {
-      if (await askPaper()) return doStep();
+      if (await tryAsk(askPaper, "paper")) return doStep();
       return;
     }
 
+    // Step 5: Sheet thickness
     if (!d.thick) {
-      if (await askSheetThickness()) return doStep();
+      if (await tryAsk(askSheetThickness, "sheet thickness")) return doStep();
       return;
     }
 
+    // Calculate quantity
     const { qty, effective, remainder } = calcQty({ stackHeight: d.stackHeight, sheetThick: d.thick, paper: d.paper });
     if (qty === null) {
       setWarn(P.calcErr);
@@ -1372,6 +2050,7 @@ const MetalInventory = (() => {
       return;
     }
 
+    // Confirm and save
     const readback = P.readback(d, qty);
     const confirmRes = await confirmPrompt({
       text: readback,
@@ -1764,8 +2443,50 @@ const MetalInventory = (() => {
       } catch (e) { }
     });
 
+    // Flow Mode Selector
+    if (E.miFlowMode) {
+      const updateFlowModeButton = () => {
+        const mode = state.draft.flowMode || "standard";
+        const labels = {
+          standard: "📋 Standard",
+          po_lookup: "📦 PO Lookup",
+          sheet_override: "🔢 Sheet Count"
+        };
+        E.miFlowMode.textContent = labels[mode] || labels.standard;
+      };
+
+      E.miFlowMode.addEventListener("click", () => {
+        const modes = ["standard", "po_lookup", "sheet_override"];
+        const current = state.draft.flowMode || "standard";
+        const currentIndex = modes.indexOf(current);
+        const nextIndex = (currentIndex + 1) % modes.length;
+        state.draft.flowMode = modes[nextIndex];
+        updateFlowModeButton();
+        persist();
+      });
+
+      updateFlowModeButton();
+    }
+
     E.miManual.addEventListener("click", manualEntry);
     if (E.miEditDraft) E.miEditDraft.addEventListener("click", manualEditDraft);
+
+    // Voice Selector with State Persistence
+    if (E.miVoiceSelect) {
+      // Sync dropdown with saved state on load
+      const savedVoice = state.selectedVoice || 'af_heart';
+      console.log('🎙️ Loading saved voice:', savedVoice);
+      E.miVoiceSelect.value = savedVoice;
+
+      E.miVoiceSelect.addEventListener('change', async () => {
+        const voice = E.miVoiceSelect.value;
+        console.log('🎙️ Voice changed to:', voice);
+        state.selectedVoice = voice;
+        persist();
+        console.log('🎙️ Voice saved to state:', state.selectedVoice);
+        await speakAsync(state.lang === "es" ? "Voz cambiada." : "Voice set.");
+      });
+    }
 
     E.miComplete.addEventListener("click", exportExcel);
 
@@ -1787,8 +2508,13 @@ if (typeof window !== "undefined") window.MetalInventory = MetalInventory;
 
 /* ---------- Bootstrap ---------- */
 if (typeof window !== 'undefined' && window.MetalInventory) {
-  window.addEventListener('load', () => {
+  const boot = () => {
     console.log('Metal Inventory Standalone Booting...');
     if (window.MetalInventory.bind) window.MetalInventory.bind();
-  });
+  };
+  if (document.readyState === 'complete' || document.readyState === 'interactive') {
+    setTimeout(boot, 1);
+  } else {
+    window.addEventListener('DOMContentLoaded', boot);
+  }
 }

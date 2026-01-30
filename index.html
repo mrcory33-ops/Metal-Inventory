@@ -631,11 +631,23 @@
       <div class="card-accent"></div>
       <div class="sectionTitle">
         <h2>Voice Terminal</h2>
-        <div style="display:flex; gap:8px; align-items:center;">
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap: wrap;">
+          <select id="miVoiceSelect"
+            style="padding: 6px 10px; font-size: 0.75rem; background: var(--bg-surface); border: 1px solid var(--neon-cyan); color: var(--neon-cyan); border-radius: 8px; cursor: pointer;">
+            <option value="af_heart">♀ Heart (US)</option>
+            <option value="af_bella">♀ Bella (US)</option>
+            <option value="af_sarah">♀ Sarah (US)</option>
+            <option value="am_adam">♂ Adam (US)</option>
+            <option value="am_michael">♂ Michael (US)</option>
+            <option value="bf_emma">♀ Emma (UK)</option>
+            <option value="bm_george">♂ George (UK)</option>
+            <option value="bm_lewis">♂ Lewis (UK)</option>
+          </select>
           <button id="miLangToggle" type="button"
             style="padding: 6px 12px; font-size: 0.75rem; min-width: auto; background: var(--bg-surface); border: 1px solid var(--neon-blue); color: var(--neon-blue);">EN</button>
           <button id="miTestMic" type="button"
             style="padding: 6px 12px; font-size: 0.75rem; min-width: auto; background: rgba(255,255,255,0.02);">Test</button>
+          <span id="miTestStatus" style="font-size: 0.75rem; color: #94a3b8; margin-left:8px;"></span>
         </div>
       </div>
 
@@ -654,9 +666,13 @@
         <!-- Chat bubbles appear here -->
       </div>
 
-      <div class="input-group" style="padding: 10px 0;">
-        <button class="primary" id="miRecord" type="button">
+      <div class="input-group" style="padding: 10px 0; display: flex; gap: 10px;">
+        <button class="primary" id="miRecord" type="button" style="flex: 1;">
           🎙️ Record Entry
+        </button>
+        <button id="miFlowMode" type="button"
+          style="flex: 0.6; background: rgba(147,51,234,0.1); border: 1px solid rgba(147,51,234,0.4); color: var(--neon-purple); font-size: 0.85rem;">
+          📋 Standard
         </button>
       </div>
 
@@ -667,7 +683,8 @@
           style="color: var(--neon-red); border-color: rgba(239,68,68,0.3);">RETRY</button>
         <button id="miManual" type="button" style="background: rgba(255,255,255,0.02); font-size: 0.8rem;">Manual
           Input</button>
-        <button id="miEditDraft" type="button" style="background: rgba(0,242,234,0.06); border:1px solid rgba(0,242,234,0.4); font-size: 0.8rem;">Edit
+        <button id="miEditDraft" type="button"
+          style="background: rgba(0,242,234,0.06); border:1px solid rgba(0,242,234,0.4); font-size: 0.8rem;">Edit
           Draft</button>
       </div>
 
@@ -707,7 +724,7 @@
   <!-- External Deps -->
   <script crossorigin="anonymous" src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <!-- Main Script -->
-  <script src="script.js"></script>
+  <script type="module" src="/script.js"></script>
 </body>
 
 </html>
