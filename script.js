@@ -445,32 +445,9 @@ const MetalInventory = (() => {
     window.speechSynthesis.onvoiceschanged = () => { _cachedVoice = null; getVoice(); };
   }
 
-  /* TTS: Try Speechify Cloud first, Fallback to Browser */
+  /* TTS: Browser SpeechSynthesis Only (Backend Removed) */
   const speakAsync = async (text) => {
-    // 1. Try Speechify Cloud (requires backend)
-    try {
-      const lang = state.lang || "en";
-      const resp = await fetch('/api/speechify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, lang })
-      });
-      if (resp.ok) {
-        const blob = await resp.blob();
-        const url = URL.createObjectURL(blob);
-        const aud = new Audio(url);
-        await new Promise(r => {
-          aud.onended = r;
-          aud.onerror = r;
-          aud.play().catch(r);
-        });
-        return; // Success, skip browser TTS
-      }
-    } catch (e) {
-      // API call failed, fall through to browser TTS
-    }
-
-    // 2. Fallback: Browser SpeechSynthesis
+    // Fallback: Browser SpeechSynthesis
     return new Promise((resolve) => {
       try {
         if (!("speechSynthesis" in window)) { resolve(); return; }
@@ -486,12 +463,11 @@ const MetalInventory = (() => {
         u.onend = () => resolve();
         u.onerror = (e) => resolve();
         window.speechSynthesis.speak(u);
-        // Safety timeout: approx 100ms per char + 1s buffer
+        // Safety timeout
         setTimeout(resolve, (text.length * 100) + 1000);
       } catch (e) { resolve(); }
     });
   };
-
 
   // Backwards compat shim if needed, or just redirect
   const speak = (text) => speakAsync(text);
