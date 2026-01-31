@@ -606,14 +606,28 @@ const MetalInventory = (() => {
     lastEndedAt: 0
   };
 
+  // --- ELEVEN LABS CONFIG ---
+  // PROD: Load these from user settings or a secure endpoint if possible
+  // For standalone client-side demo, we use variables or localStorage
+  const getElevenLabsConfig = () => {
+    try {
+      const cfg = JSON.parse(localStorage.getItem('METAL_INV_11LABS') || '{}');
+      const defaultKey = "sk_d795a9c897c9353deaa8c2028b5ab6d97096a4f60e428817";
+      return {
+        key: cfg.key || defaultKey,
+        voiceId: cfg.voiceId || "21m00Tcm4TlvDq8ikWAM" // Default: Rachel
+      };
+    } catch { return { key: "sk_d795a9c897c9353deaa8c2028b5ab6d97096a4f60e428817", voiceId: "" }; }
+  };
+
   const setEngineDash = (engine, voiceLabel = "") => {
     if (!E.miEngineDash) return;
     const label = voiceLabel ? `${engine} (${voiceLabel})` : engine;
     E.miEngineDash.textContent = label;
-    if (engine === "KOKORO") {
+    if (engine === "11LABS") {
+      E.miEngineDash.style.color = "#00ff9d"; // Neon Green for 11Labs
+    } else if (engine === "KOKORO") {
       E.miEngineDash.style.color = "var(--neon-cyan)";
-    } else if (engine === "BROWSER") {
-      E.miEngineDash.style.color = "var(--neon-amber)";
     } else {
       E.miEngineDash.style.color = "var(--neon-amber)";
     }
@@ -650,6 +664,87 @@ const MetalInventory = (() => {
   const TTS_LISTEN_GAP_MS = 150;
   let ttsChain = Promise.resolve();
   let ttsRunId = 0;
+
+  const speakWithElevenLabs = async (text, runId) => {
+    const cfg = getElevenLabsConfig();
+    if (!cfg.key) return false;
+
+    // Map UI selection (Kokoro/Generic ids) to ElevenLabs IDs
+    const VOICE_MAP = {
+      'af_heart': '21m00Tcm4TlvDq8ikWAM', // Rachel
+      'af_bella': 'EXAVITQu4vr4xnSDxMaL', // Bella
+      'af_sarah': 'MF3mGyEYCl7XYWbV9V6O', // Elli
+      'am_adam': 'pNInz6obpgDQGcFmaJgB', // Adam
+      'am_michael': 'ErXwobaYiN019PkySvjV', // Antoni
+      'bf_emma': 'AZnzlk1XvdvUeBnXmlld', // Domi
+      'bm_george': 'TxGEqnHWrfWFTfGW9XjX', // Josh
+      'bm_lewis': 'yoZ06aMxZJJ28mfd3POQ'  // Sam
+    };
+
+    let voiceId = cfg.voiceId || "21m00Tcm4TlvDq8ikWAM"; // default
+    if (typeof state !== 'undefined' && state.selectedVoice && VOICE_MAP[state.selectedVoice]) {
+      voiceId = VOICE_MAP[state.selectedVoice];
+    }
+
+    try {
+      // Use streaming for lower latency
+      const url = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream`;
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'xi-api-key': cfg.key
+        },
+        body: JSON.stringify({
+          text: text,
+          model_id: "eleven_turbo_v2_5",
+          voice_settings: { stability: 0.5, similarity_boost: 0.75 }
+        })
+      });
+
+      if (!response.ok) {
+        console.warn('ElevenLabs TTS request failed:', response.status);
+        return false;
+      }
+
+      const audioBlob = await response.blob();
+      const audioUrl = URL.createObjectURL(audioBlob);
+      if (runId && runId !== ttsRunId) {
+        URL.revokeObjectURL(audioUrl);
+        return false; // Interrupted
+      }
+      clearKokoroAudio(); // Reuse cleanup
+      const audio = new Audio(audioUrl);
+      audio.preload = "auto";
+      audio.volume = 1.0;
+      ttsState.activeAudio = audio;
+      ttsState.activeUrl = audioUrl;
+      timers.startTTS();
+
+      return new Promise((resolve) => {
+        let settled = false;
+        const finalize = (ok) => {
+          if (settled) return;
+          settled = true;
+          ttsState.cancel = null;
+          ttsState.lastEndedAt = Date.now();
+          timers.endTTS();
+          clearKokoroAudio();
+          resolve(ok);
+        };
+        ttsState.cancel = () => finalize(false);
+        audio.onended = () => finalize(true);
+        audio.onerror = () => finalize(false);
+        const playPromise = audio.play();
+        if (playPromise && typeof playPromise.catch === "function") {
+          playPromise.catch(() => finalize(false));
+        }
+      });
+    } catch (err) {
+      console.warn('ElevenLabs TTS error:', err);
+      return false;
+    }
+  };
 
   const speakWithKokoro = async (text, voiceOverride, runId) => {
     if (!KOKORO_TTS_URL || !text) return false;
@@ -745,6 +840,16 @@ const MetalInventory = (() => {
     }
     const run = async () => {
       const runId = ++ttsRunId;
+
+      // 1. ElevenLabs (Priority)
+      const elSuccess = await speakWithElevenLabs(text, runId);
+      if (runId !== ttsRunId) return null;
+      if (elSuccess) {
+        setEngineDash("11LABS");
+        return "11LABS";
+      }
+
+      // 2. Kokoro (Fallback 1)
       if (KOKORO_TTS_URL) {
         const voice = getKokoroVoice();
         const kokoroSuccess = await speakWithKokoro(text, voice, runId);
@@ -753,8 +858,10 @@ const MetalInventory = (() => {
           setEngineDash("KOKORO", voice);
           return "KOKORO";
         }
-        console.log('Kokoro unavailable, using browser TTS');
+        console.log('Kokoro unavailable, using fallback');
       }
+
+      // 3. Browser (Fallback 2)
       if (runId !== ttsRunId) return null;
       setEngineDash("BROWSER");
       await speakWithBrowser(text);
@@ -808,54 +915,106 @@ const MetalInventory = (() => {
   const Speech = (() => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     const supported = !!SR;
+    let activeRec = null;
 
-    const listenOnce = ({ promptText, lang = "en-US", expectYesNo = false, timeoutMs = 45000 } = {}) => new Promise((resolve) => {
+    const stop = () => {
+      if (activeRec) {
+        console.log("🛑 Stopping recognition (graceful)");
+        activeRec.stopping = true;
+        try { activeRec.stop(); } catch { }
+      }
+    };
+
+    const abort = () => {
+      if (activeRec) {
+        console.log("🛑 Aborting recognition (hard)");
+        try { activeRec.abort(); } catch { }
+        activeRec = null;
+      }
+    };
+
+    const listenOnce = ({ promptText, lang = "en-US", expectYesNo = false, timeoutMs = 45000, validator = null, continuous = false } = {}) => new Promise((resolve) => {
       if (!supported) {
         resolve({ ok: false, text: "", error: "SpeechRecognition not supported" });
         return;
       }
       const rec = new SR();
+      activeRec = rec;
       rec.lang = lang;
-      rec.continuous = false; // Single utterance mode for better control
+
+      // Continuous Mode: Keep recording until .stop() is called externally (PTT release)
+      rec.continuous = continuous;
       rec.interimResults = false;
-      rec.maxAlternatives = 3; // Get more alternatives for better accuracy
+      rec.maxAlternatives = 3;
+
       let done = false;
       let hasReceivedResult = false;
+      let accumulatedText = ""; // Accumulate results in continuous mode
 
       const finish = (res) => {
         if (done) return;
         done = true;
         try { rec.stop(); } catch { }
+        activeRec = null;
         resolve(res);
       };
 
-      // Longer timeout for industrial env
-      const timer = setTimeout(() => finish({ ok: false, text: "", error: "timeout" }), timeoutMs);
+      const startTime = Date.now();
+      const timer = setTimeout(() => {
+        console.log("⏰ listenOnce reached hard timeoutMs");
+        finish({ ok: false, text: accumulatedText, error: "timeout" });
+      }, timeoutMs);
+
+      const playPleasantBeep = () => {
+        try {
+          const Ctx = window.AudioContext || window.webkitAudioContext;
+          if (!Ctx) return;
+          const ctx = new Ctx();
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+
+          // Soft "glass" ping
+          osc.type = "sine";
+          osc.frequency.setValueAtTime(500, ctx.currentTime);
+          osc.frequency.exponentialRampToValueAtTime(900, ctx.currentTime + 0.1);
+
+          gain.gain.setValueAtTime(0, ctx.currentTime);
+          gain.gain.linearRampToValueAtTime(0.1, ctx.currentTime + 0.05);
+          gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
+
+          osc.start();
+          osc.stop(ctx.currentTime + 0.3);
+        } catch (e) { }
+      };
 
       rec.onstart = () => {
         console.log("🎤 Speech recognition started");
-        // Play subtle beep to indicate listening
-        const beep = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBSuBzvLZiTYIGGS57OihUBELTKXh8bllHAU2jdXvzn0pBSh+zPDajzsKFGCz6OyrWBQLSKDe8sFuIgYugc/y2Ik2CBhku+zooVARC0yl4fG5ZRwFNo3V7859KQUofsz');
-        beep.volume = 0.3;
-        beep.play().catch(() => { });
+        if (Date.now() - startTime < 1000) playPleasantBeep(); // Only beep on first start
+
+        const viz = document.getElementById('miVisualizer');
+        if (viz) { viz.style.borderColor = "#0f0"; setTimeout(() => viz.style.borderColor = "", 300); }
       };
 
-      rec.onspeechstart = () => {
-        console.log("🗣️ Speech detected");
-        hasReceivedResult = false;
-      };
-
-      rec.onspeechend = () => {
-        console.log("🔇 Speech ended");
-      };
+      rec.onspeechstart = () => console.log("🗣️ Speech detected");
+      rec.onspeechend = () => console.log("🔇 Speech ended");
 
       rec.onresult = (e) => {
-        if (hasReceivedResult) return; // Prevent duplicate results
-        hasReceivedResult = true;
+        // Continuous Accumulation Logic
+        if (continuous) {
+          for (let i = e.resultIndex; i < e.results.length; ++i) {
+            if (e.results[i].isFinal) {
+              accumulatedText += e.results[i][0].transcript + " ";
+            }
+          }
+          console.log("📝 Accumulating:", accumulatedText);
+          return;
+        }
 
-        clearTimeout(timer);
+        // Standard One-Shot Logic
+        if (hasReceivedResult) return;
 
-        // Get best result with highest confidence
         let bestTranscript = "";
         let bestConfidence = 0;
 
@@ -870,50 +1029,81 @@ const MetalInventory = (() => {
         }
 
         const t = bestTranscript ? String(bestTranscript).trim() : "";
-        console.log(`✅ Speech result: "${t}" (confidence: ${(bestConfidence * 100).toFixed(1)}%)`);
+        console.log(`✅ Result: "${t}" (${(bestConfidence * 100).toFixed(1)}%)`);
 
-        // Reject low confidence results
-        if (bestConfidence < 0.5 && t) {
-          console.warn("⚠️ Low confidence, rejecting");
-          finish({ ok: false, text: t, raw: t, error: "low_confidence" });
-          return;
+        // Noise Gating Logic
+        if (t && validator && typeof validator === 'function') {
+          if (!validator(t.toUpperCase())) {
+            console.log("🔇 Gated: Noise detected. Restarting...");
+            try { rec.stop(); } catch { }
+            setTimeout(() => { try { if (!done) rec.start(); } catch { } }, 50);
+            return;
+          }
         }
 
+        hasReceivedResult = true;
+        clearTimeout(timer);
         if (expectYesNo) {
           const low = t.toLowerCase();
-          // Broaden yes/no matching - significantly more natural options
           const yes = /\b(yes|yeah|yep|yup|correct|confirm|affirmative|sure|ok|okay|right|good|save|store|si|sí|claro|bueno|es correcto|está bien|guardar)\b/i.test(low);
           const no = /\b(no|nope|negative|retry|incorrect|nah|wrong|cancel|wait|stop|back|mal|error|repetir|cancelar)\b/i.test(low);
-
           if (yes) finish({ ok: true, text: "yes", raw: t });
           else if (no) finish({ ok: true, text: "no", raw: t });
           else finish({ ok: false, text: t, raw: t, error: "not_yes_no" });
           return;
         }
+
         finish({ ok: !!t, text: t, raw: t, error: t ? "" : "empty" });
       };
 
       rec.onerror = (e) => {
+        console.warn("❌ Speech error:", e.error);
+
+        if (continuous && !rec.stopping) {
+          if (e.error === "no-speech" || e.error === "aborted" || e.error === "network") return;
+        }
+
+        if (e.error === "no-speech" && !continuous) {
+          // Check if we still have time left. Browser silence timeout is usually ~8s.
+          if (Date.now() - startTime < timeoutMs - 2000) {
+            console.log("🔄 Silent restart due to no-speech...");
+            return; // onend will handle the restart
+          }
+          clearTimeout(timer);
+          finish({ ok: false, text: accumulatedText, error: "timeout" });
+          return;
+        }
+        if (e.error === "aborted" || e.error === "network") {
+          if (Date.now() - startTime < timeoutMs - 2000) return;
+        }
+
         clearTimeout(timer);
-        console.warn("❌ Speech error event:", e.error, e);
-        if (e.error === "no-speech") {
-          // benign, just timeout
-          finish({ ok: false, text: "", error: "timeout" });
-          return;
-        }
-        if (e.error === "aborted") {
-          // User stopped or browser interrupted
-          finish({ ok: false, text: "", error: "aborted" });
-          return;
-        }
-        finish({ ok: false, text: "", error: e.error || "error" });
+        finish({ ok: false, text: accumulatedText, error: e.error || "error" });
       };
 
       rec.onend = () => {
-        if (!done) {
-          console.log("🔚 Recognition ended without result");
-          finish({ ok: false, text: "", error: "end_gap" });
+        if (done) return;
+
+        // Restart logic for both continuous and silence-prevention
+        if (!rec.stopping && (continuous || (Date.now() - startTime < timeoutMs - 1000))) {
+          console.log("🔄 Auto-restarting recognition loop...");
+          setTimeout(() => {
+            if (done || rec.stopping) return;
+            try { rec.start(); } catch (e) {
+              console.error("Restart failed", e);
+              if (!continuous) {
+                clearTimeout(timer);
+                finish({ ok: !!accumulatedText, text: accumulatedText, error: "restart_fail" });
+              }
+            }
+          }, 50);
+          return;
         }
+
+        console.log("🔚 Recognition ended. Final Text:", accumulatedText);
+        clearTimeout(timer);
+        const final = accumulatedText.trim();
+        finish({ ok: !!final, text: final, error: final ? "" : "end_gap" });
       };
 
       try {
@@ -921,12 +1111,11 @@ const MetalInventory = (() => {
         rec.start();
       } catch (e) {
         clearTimeout(timer);
-        console.error("💥 Speech start failed:", e);
-        finish({ ok: false, text: "", error: "start_failed: " + (e.message || String(e)) });
+        finish({ ok: false, text: "", error: "start_failed" });
       }
     });
 
-    return { supported, listenOnce };
+    return { supported, listenOnce, abort, stop };
   })();
 
   // Signature pad (canvas)
@@ -1060,7 +1249,12 @@ const MetalInventory = (() => {
   };
 
   const resetDraft = () => {
-    state.draft = { step: "location", location: "", part: "", partKey: "", thick: null, sheetThickSource: "", type: "", desc: "", stackHeight: null, paper: null };
+    const currentMode = (state.draft && state.draft.flowMode) || "standard";
+    state.draft = {
+      step: "idle",
+      flowMode: currentMode,
+      location: "", part: "", partKey: "", thick: null, sheetThickSource: "", type: "", desc: "", stackHeight: null, paper: null
+    };
     state.pendingConfirm = null;
     setWarn("");
     persist();
@@ -1078,6 +1272,20 @@ const MetalInventory = (() => {
     if (E.miEditDraft) E.miEditDraft.disabled = !state.active || busy;
     // Allow export if we have entries, even if paused
     if (E.miComplete) E.miComplete.disabled = !(state.entries.length > 0);
+
+    // Resume Button State
+    if (E.miStartResume) {
+      if (state.active) {
+        E.miStartResume.textContent = "SESSION ACTIVE";
+        E.miStartResume.style.opacity = "0.7";
+      } else if (state.sessionName) {
+        E.miStartResume.textContent = "▶ RESUME SESSION";
+        E.miStartResume.style.opacity = "1";
+      } else {
+        E.miStartResume.textContent = "START SESSION";
+        E.miStartResume.style.opacity = "1";
+      }
+    }
   };
 
   const setListening = (v) => {
@@ -1108,43 +1316,38 @@ const MetalInventory = (() => {
     }
     E.miEntries.innerHTML = ents.map((e, idx) => {
       const paperText = e.paper ? "Paper" : "No Paper";
+      const ts = (e.createdAt || "").split("T")[1] ? (e.createdAt || "").split("T")[1].slice(0, 5) : "";
       return `
         <div class="miEntry">
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; border-bottom:1px solid rgba(255,255,255,0.1); padding-bottom:8px;">
-            <div style="font-family:'JetBrains Mono'; font-size:1.1rem; color:var(--neon-cyan); font-weight:800;">${U.escape(e.location || "LOC")}</div>
-            <div style="display:flex; gap:6px; align-items:center;">
-              <button type="button" data-mi-edit="${idx}" style="padding:6px 12px; min-width:auto; font-size:0.7rem; border:1px solid rgba(0,242,234,0.5); background: rgba(0,242,234,0.08); color:#7ffdf7;">EDIT</button>
-              <button type="button" data-mi-del="${idx}" class="danger" style="padding:6px 12px; min-width:auto; font-size:0.7rem;">DEL</button>
-            </div>
+          <!-- Left: Part Block -->
+          <div class="miEntryPartBlock">
+            <label>PART NUMBER</label>
+            <strong>${U.escape(e.part || e.po || "N/A")}</strong>
+            <span style="font-size:0.6rem; color:rgba(255,255,255,0.4); margin-top:10px;">${ts}</span>
           </div>
           
-          <div class="miEntryDetails">
-            <div class="data-point">
-              <span>Part #</span>
-              <strong style="color:#fff; font-size:1rem;">${U.escape(e.part || "")}</strong>
+          <!-- Right: Info Block -->
+          <div class="miEntryInfoBlock">
+            <div class="miInfoPoint qty">
+              <label>QUANTITY</label>
+              <strong>${U.escape(String(e.qty ?? "0"))}</strong>
             </div>
-            <div class="data-point">
-              <span>Qty</span>
-              <strong style="color:var(--neon-green); font-size:1.1rem;">${U.escape(String(e.qty ?? ""))}</strong>
+            <div class="miInfoPoint">
+              <label>LOCATION</label>
+              <strong>${U.escape(e.location || "---")}</strong>
             </div>
-            <div class="data-point">
-              <span>Stack</span>
-              <strong>${paperText}</strong>
+            <div class="miInfoPoint">
+              <label>THICKNESS</label>
+              <strong>${U.escape(String(e.sheetThick || e.stackHeight || "0"))}″</strong>
             </div>
-          </div>
-          
-          <div class="miEntryDetails" style="margin-top:8px;">
-             <div class="data-point">
-              <span>Height</span>
-              <strong>${U.escape(String(e.stackHeight || ""))}″</strong>
+            <div class="miInfoPoint">
+              <label>STACK</label>
+              <strong style="font-size:0.8rem;">${paperText}</strong>
             </div>
-             <div class="data-point">
-              <span>Thick</span>
-              <strong>${U.escape(String(e.sheetThick || ""))}″</strong>
-            </div>
-             <div class="data-point">
-              <span>Timestamp</span>
-              <span style="font-size:0.65rem; opacity:0.7">${(e.createdAt || "").split("T")[1].slice(0, 5)}</span>
+
+            <div class="miEntryActions">
+              <button type="button" data-mi-edit="${idx}" class="edit">EDIT</button>
+              <button type="button" data-mi-del="${idx}" class="del">DELETE</button>
             </div>
           </div>
         </div>
@@ -1218,7 +1421,9 @@ const MetalInventory = (() => {
       draft: { step: "idle", location: "", part: "", partKey: "", thick: null, sheetThickSource: "", type: "", desc: "", stackHeight: null, paper: null },
       pendingConfirm: null,
       sigDataUrl: "",
-      listening: false
+      listening: false,
+      isPttHeld: false,
+      interactive: false // Default to passive/idle
     };
     try { localStorage.removeItem(LS_ACTIVE); } catch (e) { }
     chat.clear();
@@ -1244,13 +1449,21 @@ const MetalInventory = (() => {
     persist();
     setButtons("awaitConfirm");
     chat.pushSys(text);
+    // Explicitly do NOT stop TTS here if we want to hear the question.
+    // However, speakAsync calls stopTTS internally if interrupt=true.
+    // confirmPrompt usually wants to speak immediately.
 
     await speakAsync(text);
     if (correctText) await speakAsync(correctText);
 
     await new Promise(r => setTimeout(r, 100));
 
-    const res = await listenOnce({ expectYesNo: true, timeoutMs, lang });
+    const res = await listenOnce({
+      expectYesNo: true,
+      timeoutMs,
+      lang,
+      validator: (t) => state.isPttHeld || /^(yes|no|si|non?|correcto|correct)$/i.test(t)
+    });
     if (res.ok && (res.text === "yes" || res.text === "no")) {
       state.pendingConfirm = null;
       persist();
@@ -1348,8 +1561,12 @@ const MetalInventory = (() => {
 
     if (currentMode === "paper" || RE.paperKw.test(raw)) {
       const low = raw.toLowerCase();
-      if (/\b(no|nope|nah|sin)\b/.test(low)) res.paper = false;
-      if (/\b(yes|yeah|yep|yup|paper|si|sÃ­)\b/.test(low)) res.paper = true;
+      // Prioritize explicit negative first
+      if (/\b(no|nope|nah|sin)\b/.test(low)) {
+        res.paper = false;
+      } else if (/\b(yes|yeah|yep|yup|paper|si|s[i\u00ED])\b/.test(low)) {
+        res.paper = true;
+      }
     }
 
     // 2. IMPLICIT EXTRACTION (Based on currentMode or Contextual Clues)
@@ -1383,141 +1600,121 @@ const MetalInventory = (() => {
     return res;
   };
 
-  const doStep = async () => {
-    if (!state.active) {
-      setWarn(state.lang === "es" ? "Sesion pausada." : "Session paused.");
+  // --- Module Scope Helpers (Extracted from doStep) ---
+  const getIsEs = () => state.lang === "es";
+
+  const P = {
+    get readyLoc() { return getIsEs() ? "Ubicación?" : "Location?"; },
+    get paused() { return getIsEs() ? "Pausado." : "Paused."; },
+    get resuming() { return getIsEs() ? "Continuando." : "Resuming."; },
+    get captured() { return "[C]"; },
+    get noInput() { return getIsEs() ? "Repetir." : "Retry."; },
+    get partNum() { return getIsEs() ? "Parte?" : "Part?"; },
+    get po() { return getIsEs() ? "PO?" : "PO?"; },
+    get gauge() { return getIsEs() ? "Calibre?" : "Gauge?"; },
+    get qty() { return getIsEs() ? "Cantidad?" : "Count?"; },
+    get thickness() { return getIsEs() ? "Espesor?" : "Thickness?"; },
+    get paper() { return getIsEs() ? "Papel?" : "Paper?"; },
+    get sheetThick() { return getIsEs() ? "Hoja?" : "Sheet?"; },
+    get calcErr() { return getIsEs() ? "Error." : "Error."; },
+    get correct() { return getIsEs() ? "Correcto?" : "Correct?"; },
+    get saved() { return getIsEs() ? "Listo." : "Got it."; },
+    get corrected() { return getIsEs() ? "Corregido." : "Fixed."; },
+    get whatWrong() { return getIsEs() ? "Qué cambiar?" : "What's wrong?"; },
+    get voiceUnclear() { return getIsEs() ? "Toca botón." : "Tap button."; },
+    get needField() { return getIsEs() ? "Diga campo." : "Say field."; },
+    get flowChoice() { return getIsEs() ? "PO o conteo?" : "PO or count?"; },
+    readback: (draft, qty) => {
+      const isEs = getIsEs();
+      const paperText = draft.paper ? (isEs ? "con papel" : "paper") : (isEs ? "sin papel" : "no paper");
+      const thickText = Number.isFinite(draft.stackHeight) ? draft.stackHeight : "";
+      const base = `${draft.location}, ${draft.part || draft.po}, ${thickText}, ${paperText}.`;
+      const qtyText = isEs ? `${qty}.` : `${qty} pieces.`;
+      const sheetText = draft.sheetThickSource === "manual"
+        ? (isEs ? `Hoja ${draft.thick}.` : `Sheet ${draft.thick}.`)
+        : "";
+      return `${base} ${sheetText} ${qtyText}`.trim();
+    }
+  };
+
+  const isStop = (text) => /\b(stop|cancel|exit|finish|done|pause|alto|salir|terminar)\b/i.test(String(text || ""));
+
+  const paperFromText = (text) => {
+    return validateInput(text, "yesno");
+  };
+
+  const announceDraft = (slots) => {
+    const isEs = getIsEs();
+    const parts = [];
+    if (slots.location) parts.push(isEs ? `Ubic:${slots.location}` : `Loc:${slots.location}`);
+    if (slots.part) parts.push(isEs ? `Parte:${slots.part}` : `Part:${slots.part}`);
+    if (slots.stackHeight) parts.push(isEs ? `Esp:${slots.stackHeight}"` : `Thk:${slots.stackHeight}"`);
+    if (slots.thick) parts.push(isEs ? `Hoja:${slots.thick}"` : `Sheet:${slots.thick}"`);
+    if (slots.paper !== undefined) parts.push(slots.paper ? (isEs ? "Papel" : "Paper") : (isEs ? "SinPapel" : "NoPaper"));
+    if (parts.length > 0) {
+      chat.pushSys(`${P.captured} ${parts.join(", ")}`);
+    }
+  };
+
+  const applyPartRecord = (partKey) => {
+    if (!partKey) return;
+    const rec = (dbMap || {})[partKey];
+    const d = state.draft;
+    if (!rec) {
+      d.type = "";
+      d.desc = "";
       return;
     }
-    setWarn("");
-    setOk("");
-    updateHeader();
+    d.type = rec.type || "";
+    d.desc = rec.desc || "";
+    if (rec.thick && d.sheetThickSource !== "manual") {
+      d.thick = rec.thick;
+      d.sheetThickSource = "db";
+    }
+  };
 
-    await loadDb().catch((e) => {
-      setWarn("DB Error: " + e.message);
-      throw e;
-    });
+  const applySlotsToDraft = (slots) => {
+    const d = state.draft;
+    if (!slots) return false;
+    let changed = false;
+    let partChanged = false;
 
+    if (slots.location) { d.location = slots.location; changed = true; }
+    if (slots.part) {
+      d.part = slots.part;
+      d.partKey = slots.partKey || normPart(slots.part);
+      partChanged = true; changed = true;
+    } else if (slots.partKey && !d.partKey) {
+      d.partKey = slots.partKey;
+      d.part = d.part || slots.partKey;
+      partChanged = true; changed = true;
+    }
+
+    if (partChanged) {
+      d.type = ""; d.desc = ""; d.thick = null; d.sheetThickSource = "";
+    }
+
+    if (slots.thick) { d.thick = slots.thick; d.sheetThickSource = "manual"; changed = true; }
+    if (slots.stackHeight) { d.stackHeight = slots.stackHeight; changed = true; }
+    if (slots.paper !== undefined && slots.paper !== null) { d.paper = slots.paper; changed = true; }
+
+    if (d.partKey) applyPartRecord(d.partKey);
+    return changed;
+  };
+
+  const doStep = async (interactive = true) => {
+    if (!state.active) {
+      if (state.lang === "es") setWarn("Sesion pausada."); else setWarn("Session paused.");
+      return;
+    }
+    setWarn(""); setOk(""); updateHeader();
+    await loadDb().catch(e => { setWarn("DB Error: " + e.message); throw e; });
     const d = state.draft || {};
     const isEs = state.lang === "es";
     const langCode = isEs ? "es-ES" : "en-US";
-    const map = dbMap || {};
 
-    const P = {
-      // Brief Mode Prompts (Requirement 5)
-      readyLoc: isEs ? "Ubicación?" : "Location?",
-      paused: isEs ? "Pausado." : "Paused.",
-      resuming: isEs ? "Continuando." : "Resuming.",
-      captured: isEs ? "[C]" : "[C]",
-      noInput: isEs ? "Repetir." : "Retry.",
-      partNum: isEs ? "Parte?" : "Part?",
-      po: isEs ? "PO?" : "PO?",
-      gauge: isEs ? "Calibre?" : "Gauge?",
-      qty: isEs ? "Cantidad?" : "Count?",
-      thickness: isEs ? "Espesor?" : "Thickness?",
-      paper: isEs ? "Papel?" : "Paper?",
-      sheetThick: isEs ? "Hoja?" : "Sheet?",
-      calcErr: isEs ? "Error." : "Error.",
-      correct: isEs ? "Correcto?" : "Correct?",
-      saved: isEs ? "Listo." : "Got it.",
-      corrected: isEs ? "Corregido." : "Fixed.",
-      whatWrong: isEs ? "Qué cambiar?" : "What's wrong?",
-      voiceUnclear: isEs ? "Toca botón." : "Tap button.",
-      needField: isEs ? "Diga campo." : "Say field.",
-      flowChoice: isEs ? "PO o conteo?" : "PO or count?",
-      readback: (draft, qty) => {
-        const paperText = draft.paper ? (isEs ? "con papel" : "paper") : (isEs ? "sin papel" : "no paper");
-        const thickText = Number.isFinite(draft.stackHeight) ? draft.stackHeight : "";
-        const base = isEs
-          ? `${draft.location}, ${draft.part || draft.po}, ${thickText}, ${paperText}.`
-          : `${draft.location}, ${draft.part || draft.po}, ${thickText}, ${paperText}.`;
-        const qtyText = isEs ? `${qty}.` : `${qty} pieces.`;
-        const sheetText = draft.sheetThickSource === "manual"
-          ? (isEs ? `Hoja ${draft.thick}.` : `Sheet ${draft.thick}.`)
-          : "";
-        return `${base} ${sheetText} ${qtyText}`.trim();
-      }
-    };
 
-    const isStop = (text) => /\b(stop|cancel|exit|finish|done|pause|alto|salir|terminar)\b/i.test(String(text || ""));
-    const paperFromText = (text) => {
-      return validateInput(text, "yesno");
-    };
-
-    const announceDraft = (slots) => {
-      const parts = [];
-      if (slots.location) parts.push(isEs ? `Ubic:${slots.location}` : `Loc:${slots.location}`);
-      if (slots.part) parts.push(isEs ? `Parte:${slots.part}` : `Part:${slots.part}`);
-      if (slots.stackHeight) parts.push(isEs ? `Esp:${slots.stackHeight}"` : `Thk:${slots.stackHeight}"`);
-      if (slots.thick) parts.push(isEs ? `Hoja:${slots.thick}"` : `Sheet:${slots.thick}"`);
-      if (slots.paper !== undefined) parts.push(slots.paper ? (isEs ? "Papel" : "Paper") : (isEs ? "SinPapel" : "NoPaper"));
-      if (parts.length > 0) {
-        chat.pushSys(`${P.captured} ${parts.join(", ")}`);
-      }
-    };
-
-    const applyPartRecord = (partKey) => {
-      if (!partKey) return;
-      const rec = map[partKey];
-      if (!rec) {
-        d.type = "";
-        d.desc = "";
-        return;
-      }
-      d.type = rec.type || "";
-      d.desc = rec.desc || "";
-      if (rec.thick && d.sheetThickSource !== "manual") {
-        d.thick = rec.thick;
-        d.sheetThickSource = "db";
-      }
-    };
-
-    const applySlotsToDraft = (slots) => {
-      if (!slots) return false;
-      let changed = false;
-      let partChanged = false;
-
-      if (slots.location) {
-        d.location = slots.location;
-        changed = true;
-      }
-      if (slots.part) {
-        d.part = slots.part;
-        d.partKey = slots.partKey || normPart(slots.part);
-        partChanged = true;
-        changed = true;
-      } else if (slots.partKey && !d.partKey) {
-        d.partKey = slots.partKey;
-        d.part = d.part || slots.partKey;
-        partChanged = true;
-        changed = true;
-      }
-
-      if (partChanged) {
-        d.type = "";
-        d.desc = "";
-        d.thick = null;
-        d.sheetThickSource = "";
-      }
-
-      if (slots.thick) {
-        d.thick = slots.thick;
-        d.sheetThickSource = "manual";
-        changed = true;
-      }
-      if (slots.stackHeight) {
-        d.stackHeight = slots.stackHeight;
-        changed = true;
-      }
-      if (slots.paper !== undefined && slots.paper !== null) {
-        d.paper = slots.paper;
-        changed = true;
-      }
-
-      if (d.partKey) applyPartRecord(d.partKey);
-      return changed;
-    };
-
-    const listenFor = async (promptText, { timeoutMs = 45000 } = {}) => {
+    const listenFor = async (promptText, { timeoutMs = 45000, validator = null } = {}) => {
       // Visual feedback: activate listening visualizer immediately
       const viz = document.getElementById('miVisualizer');
       if (viz) viz.classList.add('active');
@@ -1530,7 +1727,16 @@ const MetalInventory = (() => {
       }
 
       timers.startListen();
-      const r = await listenOnce({ timeoutMs, lang: langCode });
+
+      // Combined validator: PTT overrides everything, Stop commands allowed
+      const finalValidator = (text) => {
+        if (state.isPttHeld) return true;
+        if (isStop(text)) return true;
+        if (validator && typeof validator === 'function') return validator(text);
+        return true;
+      };
+
+      const r = await listenOnce({ timeoutMs, lang: langCode, validator: finalValidator });
       timers.endListen(r.ok);
 
       // Hide visualizer when done listening
@@ -1551,151 +1757,141 @@ const MetalInventory = (() => {
     };
 
     const askLocation = async () => {
-      const r = await listenFor(P.readyLoc, { timeoutMs: 45000 });
+      const r = await listenFor(P.readyLoc, {
+        timeoutMs: 45000,
+        validator: (t) => t && (validateInput(t, "location") || extractSlots(t, "location").location)
+      });
       if (!r) return false;
-
-      // Use validateInput for phonetic mapping and strict format
-      const validated = validateInput(r.text, "location");
-      if (!validated) {
-        setWarn(P.noInput);
-        return false;
-      }
-
-      d.location = validated;
-      chat.pushSys(`${P.captured} Loc:${d.location}`);
-      persist();
-      return true;
+      const slots = extractSlots(r.text, "location");
+      applySlotsToDraft(slots);
+      if (d.location) { chat.pushSys(`${P.captured} Loc:${d.location}`); persist(); return true; }
+      const val = validateInput(r.text, "location");
+      if (val) { d.location = val; chat.pushSys(`${P.captured} Loc:${d.location}`); persist(); return true; }
+      setWarn(P.noInput);
+      return false;
     };
 
     const askPart = async () => {
-      // User request: remove location context from prompt
       const prompt = isEs ? P.partNum : P.partNum;
-      const r = await listenFor(prompt, { timeoutMs: 45000 });
+      const r = await listenFor(prompt, {
+        timeoutMs: 45000,
+        validator: (t) => t && (validateInput(t, "part") || extractSlots(t, "part").part)
+      });
       if (!r) return false;
-
-      // Use validateInput for strict 4-digit validation
-      const validated = validateInput(r.text, "part");
-      if (!validated) {
-        setWarn(P.noInput);
-        return false;
+      const slots = extractSlots(r.text, "part");
+      applySlotsToDraft(slots);
+      if (d.part) { chat.pushSys(`${P.captured} Part:${d.part}`); persist(); return true; }
+      const val = validateInput(r.text, "part");
+      if (val) {
+        d.part = val; d.partKey = normPart(val);
+        chat.pushSys(`${P.captured} Part:${d.part}`); applyPartRecord(d.partKey);
+        persist(); return true;
       }
-
-      d.part = validated;
-      d.partKey = normPart(validated);
-      chat.pushSys(`${P.captured} Part:${d.part}`);
-      applyPartRecord(d.partKey);
-      persist();
-      return true;
+      setWarn(P.noInput);
+      return false;
     };
 
     const askSheetThickness = async () => {
-      const r = await listenFor(P.sheetThick, { timeoutMs: 45000 });
+      const r = await listenFor(P.sheetThick, {
+        timeoutMs: 45000,
+        validator: (t) => t && (validateInput(t, "thickness") || extractSlots(t, "sheet").thick)
+      });
       if (!r) return false;
       const slots = extractSlots(r.text, "sheet");
-      if (slots.thick) {
-        d.thick = slots.thick;
-        d.sheetThickSource = "manual";
-        announceDraft({ thick: d.thick });
-        persist();
-        return true;
-      }
-      const numMatch = r.text.match(/(\d+(\.\d+)?)/);
-      if (numMatch) {
-        const t = parseFloat(numMatch[1]);
-        if (t > 0 && t <= 8.5) {
-          d.thick = t;
-          d.sheetThickSource = "manual";
-          announceDraft({ thick: d.thick });
-          persist();
-          return true;
-        }
+      applySlotsToDraft(slots);
+      if (d.thick) { persist(); return true; }
+      const match = r.text.match(/(\d+(\.\d+)?)/);
+      if (match) {
+        const t = parseFloat(match[1]);
+        if (t > 0 && t <= 8.5) { d.thick = t; d.sheetThickSource = "manual"; announceDraft({ thick: d.thick }); persist(); return true; }
       }
       setWarn(P.noInput);
       return false;
     };
 
     const askThickness = async () => {
-      const r = await listenFor(P.thickness, { timeoutMs: 45000 });
+      const r = await listenFor(P.thickness, {
+        timeoutMs: 45000,
+        validator: (t) => t && (validateInput(t, "thickness") || extractSlots(t, "stack").stackHeight)
+      });
       if (!r) return false;
       const slots = extractSlots(r.text, "stack");
-      announceDraft(slots);
-      if (slots.stackHeight) {
-        d.stackHeight = slots.stackHeight;
-        persist();
-        return true;
-      }
-      const numMatch = r.text.match(/(\d+(\.\d+)?)/);
-      if (numMatch) {
-        const t = parseFloat(numMatch[1]);
-        if (t > 0 && t <= 8.5) {
-          d.stackHeight = t;
-          persist();
-          return true;
-        }
+      applySlotsToDraft(slots);
+      if (d.stackHeight) { persist(); return true; }
+      const match = r.text.match(/(\d+(\.\d+)?)/);
+      if (match) {
+        const t = parseFloat(match[1]);
+        if (t > 0 && t <= 8.5) { d.stackHeight = t; announceDraft({ stackHeight: t }); persist(); return true; }
       }
       setWarn(P.noInput);
       return false;
     };
 
     const askPaper = async () => {
-      const r = await listenFor(P.paper, { timeoutMs: 45000 });
+      const r = await listenFor(P.paper, {
+        timeoutMs: 45000,
+        validator: (t) => t && (validateInput(t, "yesno") || /(paper|no|sin|papel|yes|si|sí)/i.test(t) || extractSlots(t, "paper").paper !== undefined)
+      });
       if (!r) return false;
       const slots = extractSlots(r.text, "paper");
-      if (slots.paper !== undefined && slots.paper !== null) d.paper = slots.paper;
+      applySlotsToDraft(slots);
+
+      // Fallback check
       if (d.paper === null || d.paper === undefined) {
         const p = paperFromText(r.text);
         if (p !== null) d.paper = p;
       }
-      if (d.paper === null || d.paper === undefined) {
-        setWarn(P.noInput);
-        return false;
+      if (d.paper !== null && d.paper !== undefined) {
+        announceDraft({ paper: d.paper });
+        persist();
+        return true;
       }
-      announceDraft({ paper: d.paper });
-      persist();
-      return true;
+      setWarn(P.noInput);
+      return false;
     };
 
-    // NEW: Manual Entry Flow Functions
+    // NEW: Manual Entry Flow Functions with Slot Support
     const askPO = async () => {
-      const r = await listenFor(P.po, { timeoutMs: 45000 });
+      const r = await listenFor(P.po, {
+        timeoutMs: 45000,
+        validator: (t) => t && (validateInput(t, "po") || extractSlots(t, "any").po)
+      });
       if (!r) return false;
-      const validated = validateInput(r.text, "po");
-      if (!validated) {
-        setWarn(P.noInput);
-        return false;
-      }
-      d.po = validated;
-      chat.pushSys(`${P.captured} PO:${d.po}`);
-      persist();
-      return true;
+      const slots = extractSlots(r.text, "any");
+      applySlotsToDraft(slots);
+      const val = validateInput(r.text, "po");
+      if (val) d.po = val;
+      if (d.po) { chat.pushSys(`${P.captured} PO:${d.po}`); persist(); return true; }
+      setWarn(P.noInput);
+      return false;
     };
 
     const askGauge = async () => {
-      const r = await listenFor(P.gauge, { timeoutMs: 45000 });
+      const r = await listenFor(P.gauge, {
+        timeoutMs: 45000,
+        validator: (t) => t && (validateInput(t, "gauge") || extractSlots(t, "any").gauge)
+      });
       if (!r) return false;
-      const validated = validateInput(r.text, "gauge");
-      if (!validated || validated < 0.001 || validated > 1.0) {
-        setWarn(P.noInput);
-        return false;
-      }
-      d.gauge = validated;
-      chat.pushSys(`${P.captured} Gauge:${d.gauge}`);
-      persist();
-      return true;
+      const slots = extractSlots(r.text, "any");
+      applySlotsToDraft(slots);
+      const val = validateInput(r.text, "gauge");
+      if (val) d.gauge = val;
+      if (d.gauge) { chat.pushSys(`${P.captured} Gauge:${d.gauge}`); persist(); return true; }
+      setWarn(P.noInput);
+      return false;
     };
 
     const askQty = async () => {
-      const r = await listenFor(P.qty, { timeoutMs: 45000 });
+      const r = await listenFor(P.qty, {
+        timeoutMs: 45000,
+        validator: (t) => t && validateInput(t, "number")
+      });
       if (!r) return false;
-      const validated = validateInput(r.text, "number");
-      if (!validated || validated < 1 || validated > 9999 || !Number.isInteger(validated)) {
-        setWarn(P.noInput);
-        return false;
-      }
-      d.qty = Math.floor(validated);
-      chat.pushSys(`${P.captured} Qty:${d.qty}`);
-      persist();
-      return true;
+      const val = validateInput(r.text, "number");
+      if (val && val >= 1 && val <= 9999) d.qty = Math.floor(val);
+      if (d.qty) { chat.pushSys(`${P.captured} Qty:${d.qty}`); persist(); return true; }
+      setWarn(P.noInput);
+      return false;
     };
 
     const detectField = (text) => {
@@ -1795,11 +1991,14 @@ const MetalInventory = (() => {
     const MAX_RETRIES = 2;
 
     const tryAsk = async (askFn, fieldName, retryCount = 0) => {
+      if (!state.active) return false;
       timers.startStep(fieldName);
       const success = await askFn();
       timers.endStep(fieldName);
 
       if (success) return true;
+      if (!state.active) return false; // Check again after await
+
       if (retryCount < MAX_RETRIES) {
         chat.pushSys(isEs ? `Reintentar ${fieldName}.` : `Retrying ${fieldName}.`);
         await speakAsync(isEs ? "Reintentar." : "Retrying.");
@@ -1809,24 +2008,22 @@ const MetalInventory = (() => {
       return false;
     };
 
-    // === BRANCHING FLOW LOGIC ===
+    // === BRANCHING FLOW LOGIC (REFACTORED) ===
     const flowMode = d.flowMode || "standard";
+    // interactive arg is already defined in function signature
 
-    // Step 1: Location (all flows)
-    if (!d.location) {
-      if (await tryAsk(askLocation, "location")) return doStep();
-      return;
-    }
-
-    // === FLOW MODE: SHEET OVERRIDE ===
+    // --- FLOW: SHEET COUNT (Override) ---
     if (flowMode === "sheet_override") {
-      // Step 2: Part# OR PO#
+      // 1. Part or PO (Prioritized)
       if (!d.part && !d.po) {
+        if (!interactive) return;
         chat.pushSys(isEs ? "Parte o PO?" : "Part or PO?");
-        const r = await listenFor(isEs ? "Parte o PO?" : "Part or PO?", { timeoutMs: 45000 });
+        const r = await listenFor(isEs ? "Parte o PO?" : "Part or PO?", {
+          timeoutMs: 45000,
+          validator: (t) => t && (validateInput(t, "part") || validateInput(t, "po"))
+        });
         if (!r) return;
 
-        // Try part first (4 digits)
         const partValidated = validateInput(r.text, "part");
         if (partValidated) {
           d.part = partValidated;
@@ -1834,7 +2031,6 @@ const MetalInventory = (() => {
           chat.pushSys(`${P.captured} Part:${d.part}`);
           applyPartRecord(d.partKey);
         } else {
-          // Try PO (5 digits)
           const poValidated = validateInput(r.text, "po");
           if (poValidated) {
             d.po = poValidated;
@@ -1848,16 +2044,43 @@ const MetalInventory = (() => {
         return doStep();
       }
 
-      // Step 3: Sheet count
-      if (!d.qty) {
-        if (await tryAsk(askQty, "count")) return doStep();
+      // 2. Location
+      if (!d.location) {
+        if (interactive && await tryAsk(askLocation, "location")) return doStep();
         return;
       }
 
-      // Confirm and save
+      // 3. Sheet Qty OR Thickness
+      if (!d.qty && !d.stackHeight) {
+        if (!interactive) return;
+        chat.pushSys(isEs ? "Cantidad o espesor?" : "Sheet count or thickness?");
+        const r = await listenFor(isEs ? "Cantidad?" : "Count or thickness?", {
+          timeoutMs: 45000,
+          validator: (t) => t && (validateInput(t, "number") || validateInput(t, "thickness"))
+        });
+        if (!r) return;
+
+        const thickVal = validateInput(r.text, "thickness");
+        const curVal = validateInput(r.text, "number");
+
+        if (thickVal) {
+          d.stackHeight = thickVal;
+          chat.pushSys(`${P.captured} Thick:${d.stackHeight}`);
+        } else if (curVal) {
+          d.qty = Math.floor(curVal);
+          chat.pushSys(`${P.captured} Qty:${d.qty}`);
+        } else {
+          setWarn(P.noInput);
+          return;
+        }
+        persist();
+        return doStep();
+      }
+
+      // Confirm (Sheet Count)
       const readback = isEs
-        ? `${d.location}, ${d.part || d.po}, ${d.qty} hojas.`
-        : `${d.location}, ${d.part || d.po}, ${d.qty} sheets.`;
+        ? `${d.location}, ${d.part || d.po}, ${d.qty ? d.qty + ' hojas' : d.stackHeight + '"'}`
+        : `${d.location}, ${d.part || d.po}, ${d.qty ? d.qty + ' sheets' : d.stackHeight + '"'}`;
 
       const confirmRes = await confirmPrompt({
         text: readback,
@@ -1879,11 +2102,11 @@ const MetalInventory = (() => {
           materialType: d.type || "",
           description: d.desc || "",
           sheetThick: null,
-          stackHeight: null,
+          stackHeight: d.stackHeight || null,
           paper: null,
           paperThick: 0,
           effectiveThick: null,
-          qty: d.qty,
+          qty: d.qty || 0,
           remainder: 0,
           flowMode: "sheet_override"
         };
@@ -1896,82 +2119,68 @@ const MetalInventory = (() => {
         setButtons("idle");
 
         chat.pushSys(P.saved);
-        return doStep();
+
+        // Wait for "Next" command
+        if (state.active) {
+          chat.pushSys("Waiting for Next...");
+          while (state.active) {
+            const r = await listenFor(null, {
+              timeoutMs: 90000,
+              validator: (t) => /next|siguiente/i.test(t) || isStop(t)
+            });
+            if (state.active && r && /next|siguiente/i.test(r.text)) {
+              return doStep();
+            }
+            if (!r || !state.active) break;
+          }
+        }
+        return;
       }
 
       await handleCorrection(confirmRes.raw || "");
       return;
     }
 
-    // === FLOW MODE: PO LOOKUP ===
+    // --- FLOW: PO LOOKUP ---
     if (flowMode === "po_lookup") {
-      // Step 2: PO number
+      // 1. PO Number
       if (!d.po) {
-        if (await tryAsk(askPO, "PO")) return doStep();
+        if (interactive && await tryAsk(askPO, "PO")) return doStep();
+        return;
+      }
+      // 2. Location
+      if (!d.location) {
+        if (interactive && await tryAsk(askLocation, "location")) return doStep();
+        return;
+      }
+      // 3. Stack Height (Thickness)
+      if (!d.stackHeight) {
+        if (interactive && await tryAsk(askThickness, "thickness")) return doStep();
+        return;
+      }
+      // 4. Paper
+      if (d.paper === null) {
+        if (interactive && await tryAsk(askPaper, "paper")) return doStep();
+        return;
+      }
+      // 5. Gauge / Sheet Thickness (Needed for calc)
+      if (!d.thick && !d.gauge) {
+        if (interactive && await tryAsk(askGauge, "gauge")) return doStep();
         return;
       }
 
-      // Step 3: Material gauge
-      if (!d.gauge) {
-        if (await tryAsk(askGauge, "gauge")) return doStep();
+      // Calc & Confirm
+      d.thick = d.thick || d.gauge;
+      const { qty, effective, remainder } = calcQty({ stackHeight: d.stackHeight, sheetThick: d.thick, paper: d.paper });
+      if (qty === null) {
+        setWarn(P.calcErr);
+        await speakAsync(P.calcErr);
         return;
-      }
-
-      // Step 4: Thickness OR Sheet qty (user choice)
-      if (!d.stackHeight && !d.qty) {
-        chat.pushSys(isEs ? "Espesor o cantidad?" : "Thickness or count?");
-        const r = await listenFor(isEs ? "Espesor o cantidad?" : "Thickness or count?", { timeoutMs: 45000 });
-        if (!r) return;
-
-        const thickValidated = validateInput(r.text, "thickness");
-        if (thickValidated) {
-          d.stackHeight = thickValidated;
-          chat.pushSys(`${P.captured} Thick:${d.stackHeight}`);
-          persist();
-          return doStep();
-        }
-
-        const qtyValidated = validateInput(r.text, "number");
-        if (qtyValidated && qtyValidated >= 1 && qtyValidated <= 9999) {
-          d.qty = Math.floor(qtyValidated);
-          chat.pushSys(`${P.captured} Qty:${d.qty}`);
-          persist();
-          return doStep();
-        }
-
-        setWarn(P.noInput);
-        return;
-      }
-
-      // If thickness was provided, ask paper
-      if (d.stackHeight && d.paper === null) {
-        if (await tryAsk(askPaper, "paper")) return doStep();
-        return;
-      }
-
-      // Calculate or use direct qty
-      let qty, effective, remainder;
-      if (d.qty) {
-        qty = d.qty;
-        effective = null;
-        remainder = 0;
-      } else {
-        // Use gauge as sheet thickness
-        d.thick = d.gauge;
-        const calc = calcQty({ stackHeight: d.stackHeight, sheetThick: d.thick, paper: d.paper });
-        qty = calc.qty;
-        effective = calc.effective;
-        remainder = calc.remainder;
-        if (qty === null) {
-          setWarn(P.calcErr);
-          await speakAsync(P.calcErr);
-          return;
-        }
       }
 
       const readback = isEs
-        ? `${d.location}, PO ${d.po}, calibre ${d.gauge}, ${qty} hojas.`
-        : `${d.location}, PO ${d.po}, gauge ${d.gauge}, ${qty} sheets.`;
+        ? `${d.location}, PO ${d.po}, ${qty} hojas.`
+        : `${d.location}, PO ${d.po}, ${qty} sheets.`;
 
       const confirmRes = await confirmPrompt({
         text: readback,
@@ -1992,8 +2201,8 @@ const MetalInventory = (() => {
           partKey: "",
           materialType: "",
           description: "",
-          sheetThick: d.thick || d.gauge,
-          stackHeight: d.stackHeight || null,
+          sheetThick: d.thick,
+          stackHeight: d.stackHeight,
           paper: d.paper,
           paperThick: d.paper ? PAPER_THICK : 0,
           effectiveThick: effective,
@@ -2010,39 +2219,56 @@ const MetalInventory = (() => {
         setButtons("idle");
 
         chat.pushSys(P.saved);
-        return doStep();
+
+        // Wait for "Next" command
+        if (state.active) {
+          chat.pushSys("Waiting for Next...");
+          while (state.active) {
+            const r = await listenFor(null, {
+              timeoutMs: 90000,
+              validator: (t) => /next|siguiente/i.test(t) || isStop(t)
+            });
+            if (state.active && r && /next|siguiente/i.test(r.text)) {
+              return doStep();
+            }
+            if (!r || !state.active) break;
+          }
+        }
+        return;
       }
 
       await handleCorrection(confirmRes.raw || "");
       return;
     }
 
-    // === FLOW MODE: STANDARD ===
-    // Step 2: Part number
+    // --- FLOW: STANDARD ---
+    // 1. Location
+    if (!d.location) {
+      if (interactive && await tryAsk(askLocation, "location")) return doStep();
+      return;
+    }
+    // 2. Part
     if (!d.part) {
-      if (await tryAsk(askPart, "part")) return doStep();
+      if (interactive && await tryAsk(askPart, "part")) return doStep();
       return;
     }
-
-    // Step 3: Stack thickness
+    // 3. Stack Height (Thickness)
     if (!d.stackHeight) {
-      if (await tryAsk(askThickness, "thickness")) return doStep();
+      if (interactive && await tryAsk(askThickness, "thickness")) return doStep();
       return;
     }
-
-    // Step 4: Paper
+    // 4. Paper
     if (d.paper === null) {
-      if (await tryAsk(askPaper, "paper")) return doStep();
+      if (interactive && await tryAsk(askPaper, "paper")) return doStep();
+      return;
+    }
+    // 5. Sheet Thickness (if missing/needed)
+    if (!d.thick && !d.partKey) {
+      if (interactive && await tryAsk(askSheetThickness, "sheet thickness")) return doStep();
       return;
     }
 
-    // Step 5: Sheet thickness
-    if (!d.thick) {
-      if (await tryAsk(askSheetThickness, "sheet thickness")) return doStep();
-      return;
-    }
-
-    // Calculate quantity
+    // Calc & Confirm
     const { qty, effective, remainder } = calcQty({ stackHeight: d.stackHeight, sheetThick: d.thick, paper: d.paper });
     if (qty === null) {
       setWarn(P.calcErr);
@@ -2050,7 +2276,6 @@ const MetalInventory = (() => {
       return;
     }
 
-    // Confirm and save
     const readback = P.readback(d, qty);
     const confirmRes = await confirmPrompt({
       text: readback,
@@ -2087,7 +2312,22 @@ const MetalInventory = (() => {
       setButtons("idle");
 
       chat.pushSys(P.saved);
-      return doStep();
+
+      // Wait for "Next" command
+      if (state.active) {
+        chat.pushSys("Waiting for Next...");
+        while (state.active) {
+          const r = await listenFor(null, {
+            timeoutMs: 90000,
+            validator: (t) => /next|siguiente/i.test(t) || isStop(t)
+          });
+          if (state.active && r && /next|siguiente/i.test(r.text)) {
+            return doStep();
+          }
+          if (!r || !state.active) break;
+        }
+      }
+      return;
     }
 
     await handleCorrection(confirmRes.raw || "");
@@ -2439,6 +2679,7 @@ const MetalInventory = (() => {
           setWarn("Voice-to-text not supported on this device/browser. Use Manual Entry.");
           return;
         }
+        state.interactive = true; // Enable prompting
         await doStep();
       } catch (e) { }
     });
@@ -2448,11 +2689,11 @@ const MetalInventory = (() => {
       const updateFlowModeButton = () => {
         const mode = state.draft.flowMode || "standard";
         const labels = {
-          standard: "📋 Standard",
-          po_lookup: "📦 PO Lookup",
-          sheet_override: "🔢 Sheet Count"
+          standard: "<span class='say-label'>Say:</span> Loc → Part → Thick → Paper",
+          po_lookup: "<span class='say-label'>Say:</span> PO → Loc → Thick → Paper → Gauge",
+          sheet_override: "<span class='say-label'>Say:</span> Loc → Part → Count"
         };
-        E.miFlowMode.textContent = labels[mode] || labels.standard;
+        E.miFlowMode.innerHTML = labels[mode] || labels.standard;
       };
 
       E.miFlowMode.addEventListener("click", () => {
@@ -2490,9 +2731,111 @@ const MetalInventory = (() => {
 
     E.miComplete.addEventListener("click", exportExcel);
 
+    // PTT Button Logic
+    const pttBtn = document.getElementById("miPtt");
+    if (pttBtn) {
+      const setPtt = (active) => {
+        state.isPttHeld = active;
+        console.log("PTT State:", active);
+        if (active) {
+          pttBtn.style.background = "var(--neon-green)";
+          pttBtn.style.color = "#000";
+          pttBtn.innerHTML = "🎙️ TRANSMITTING...";
+        } else {
+          pttBtn.style.background = "rgba(245, 158, 11, 0.15)";
+          pttBtn.style.color = "var(--neon-amber)";
+          pttBtn.innerHTML = "✋ HOLD PUSH-TO-TALK (ACTIVE)";
+        }
+      };
+
+      pttBtn.addEventListener("pointerdown", async (e) => {
+        e.preventDefault();
+        setPtt(true);
+
+        // GOD MODE: Force abort and wait for mic to clear
+        Speech.abort();
+        stopTTS();
+
+        // Critical Delay: Allow browser to release microphone resource
+        await new Promise(r => setTimeout(r, 150));
+
+        // Ensure active
+        if (!state.active) {
+          if (!state.sessionName) startOrResume();
+          else {
+            state.active = true;
+            state.pausedAt = "";
+            chip("warn", "Session Active");
+            setButtons("idle");
+            persist();
+          }
+        }
+
+        // Launch One-Shot flow
+        setListening(true);
+        state.interactive = false; // Disable prompts (bypass mode)
+
+        // Listen
+        const langCode = state.lang === "es" ? "es-ES" : "en-US";
+        // Continuous mode
+        const r = await Speech.listenOnce({ timeoutMs: 45000, lang: langCode, continuous: true });
+        setListening(false);
+
+        if (!r.ok) return;
+
+        if (/\b(stop|cancel|exit|finish|done|pause|alto|salir|terminar)\b/i.test(r.text)) {
+          pause();
+          return;
+        }
+
+        chat.pushUser(r.text);
+        const slots = extractSlots(r.text, "any");
+
+        if (applySlotsToDraft(slots)) {
+          announceDraft(state.draft);
+          persist();
+        }
+        await doStep(false);
+      });
+
+      const endPtt = (e) => {
+        if (state.isPttHeld) {
+          try { e.preventDefault(); } catch { }
+          setPtt(false);
+          Speech.stop(); // Stop recognition on release
+        }
+      };
+
+      pttBtn.addEventListener("pointerup", endPtt);
+      pttBtn.addEventListener("pointerleave", endPtt);
+      pttBtn.addEventListener("touchend", endPtt);
+      pttBtn.addEventListener("contextmenu", e => e.preventDefault());
+    }
+
     // When opening tab, ensure chat hints
     if (E.pageMetalInventory) {
       // no-op; chat is session-based
+    }
+
+    // ElevenLabs Config UI Wiring
+    const elKey = document.getElementById('miElevenKey');
+    const elVoice = document.getElementById('miElevenVoice');
+    if (elKey && elVoice) {
+      const cfg = getElevenLabsConfig();
+      elKey.value = cfg.key || "";
+      elVoice.value = cfg.voiceId || "";
+
+      const saveElConfig = () => {
+        const newCfg = {
+          key: elKey.value.trim(),
+          voiceId: elVoice.value.trim()
+        };
+        localStorage.setItem('METAL_INV_11LABS', JSON.stringify(newCfg));
+        // console.log("ElevenLabs config saved.");
+      };
+
+      elKey.addEventListener('input', saveElConfig);
+      elVoice.addEventListener('input', saveElConfig);
     }
   };
 

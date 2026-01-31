@@ -21,23 +21,28 @@
     :root {
       --bg-deep: #030407;
       --bg-surface: #0a0b10;
-      --brand-primary: #00f2ea;
-      --brand-secondary: #4361ee;
-      --brand-accent: #f59e0b;
-      /* Amber for industrial alerts */
+
+      /* Solar Industrial Scheme */
+      --brand-primary: #3b82f6;
+      /* Electric Blue */
+      --brand-secondary: #2563eb;
+      /* Deeper Blue */
+      --brand-accent: #f97316;
+      /* Safety Orange */
 
       /* Vivid Neons */
-      --neon-cyan: #00f2ea;
-      --neon-blue: #4361ee;
-      --neon-amber: #f59e0b;
+      --neon-cyan: #3b82f6;
+      --neon-blue: #2563eb;
+      --neon-amber: #f97316;
       --neon-green: #10b981;
       --neon-red: #ef4444;
+      --neon-purple: #8b5cf6;
 
-      /* Glass */
-      --glass-bg: rgba(13, 15, 25, 0.7);
-      --glass-border: rgba(255, 255, 255, 0.08);
-      --glass-highlight: rgba(0, 242, 234, 0.05);
-      --blur: blur(25px);
+      /* Glass - Refined for clarity */
+      --glass-bg: rgba(255, 255, 255, 0.08);
+      --glass-border: rgba(255, 255, 255, 0.15);
+      --glass-highlight: rgba(255, 255, 255, 0.05);
+      --blur: blur(16px);
 
       /* Typography */
       --font-main: 'Inter', system-ui, sans-serif;
@@ -140,8 +145,10 @@
     }
 
     .glance-card {
-      background: rgba(255, 255, 255, 0.03);
-      border: 1px solid rgba(255, 255, 255, 0.05);
+      background: rgba(255, 255, 255, 0.05);
+      backdrop-filter: var(--blur);
+      -webkit-backdrop-filter: var(--blur);
+      border: 1px solid rgba(255, 255, 255, 0.1);
       border-radius: 16px;
       padding: 16px;
       text-align: center;
@@ -232,7 +239,7 @@
 
     input {
       width: 100%;
-      background: rgba(0, 0, 0, 0.3);
+      background: rgba(0, 0, 0, 0.2);
       border: 1px solid var(--glass-border);
       border-radius: 12px;
       padding: 16px;
@@ -262,7 +269,7 @@
       padding: 18px;
       border-radius: 14px;
       border: 1px solid rgba(255, 255, 255, 0.1);
-      background: rgba(255, 255, 255, 0.05);
+      background: rgba(45, 48, 53, 0.4);
       color: #fff;
       font-weight: 700;
       font-size: 0.95rem;
@@ -294,9 +301,9 @@
     #miStartResume,
     #miRecord,
     #miComplete {
-      background: linear-gradient(135deg, var(--neon-blue), var(--neon-purple));
+      background: linear-gradient(135deg, var(--neon-blue), var(--neon-cyan));
       border: none;
-      box-shadow: 0 8px 24px rgba(67, 97, 238, 0.3);
+      box-shadow: 0 8px 24px rgba(37, 99, 235, 0.3);
       text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
     }
 
@@ -353,11 +360,15 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      gap: 4px;
-      height: 40px;
-      margin: 10px 0;
+      gap: 3px;
+      height: 60px;
+      margin: 15px 0;
       opacity: 0;
       transition: opacity 0.3s;
+      background: rgba(59, 130, 246, 0.03);
+      border-radius: 12px;
+      padding: 0 20px;
+      border: 1px solid rgba(255, 255, 255, 0.05);
     }
 
     .visualizer.active {
@@ -365,31 +376,12 @@
     }
 
     .bar {
-      width: 4px;
-      height: 10px;
-      background: var(--neon-cyan);
-      border-radius: 2px;
+      width: 3px;
+      height: 8px;
+      background: linear-gradient(to top, var(--neon-blue), var(--neon-cyan));
+      border-radius: 10px;
       animation: bar-pulse 0.8s ease-in-out infinite;
-    }
-
-    .bar:nth-child(2) {
-      animation-delay: 0.1s;
-      height: 20px;
-    }
-
-    .bar:nth-child(3) {
-      animation-delay: 0.2s;
-      height: 30px;
-    }
-
-    .bar:nth-child(4) {
-      animation-delay: 0.3s;
-      height: 15px;
-    }
-
-    .bar:nth-child(5) {
-      animation-delay: 0.4s;
-      height: 25px;
+      box-shadow: 0 0 10px rgba(59, 130, 246, 0.5);
     }
 
     @keyframes bar-pulse {
@@ -397,25 +389,27 @@
       0%,
       100% {
         transform: scaleY(1);
+        opacity: 0.5;
       }
 
       50% {
-        transform: scaleY(1.8);
+        transform: scaleY(3.5);
+        opacity: 1;
       }
     }
 
     /* RECORD BUTTON - Special Pulse */
     #miRecord {
       width: 100%;
-      background: linear-gradient(135deg, #00f2ea, #4361ee);
-      color: #000;
+      background: linear-gradient(135deg, #3b82f6, #2563eb);
+      color: #fff;
       font-weight: 800;
       font-size: 1.1rem;
       padding: 24px;
       margin-bottom: 10px;
       border-radius: 100px;
       /* Circular for that modern look */
-      box-shadow: 0 0 30px rgba(0, 242, 234, 0.3);
+      box-shadow: 0 0 30px rgba(59, 130, 246, 0.3);
     }
 
     #miRecord:not(:disabled) {
@@ -424,30 +418,35 @@
 
     @keyframes record-glow {
       0% {
-        box-shadow: 0 0 0 0 rgba(0, 242, 234, 0.4);
+        box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.4);
       }
 
       70% {
-        box-shadow: 0 0 0 20px rgba(0, 242, 234, 0);
+        box-shadow: 0 0 0 20px rgba(59, 130, 246, 0);
       }
 
       100% {
-        box-shadow: 0 0 0 0 rgba(0, 242, 234, 0);
+        box-shadow: 0 0 0 0 rgba(59, 130, 246, 0);
       }
     }
 
     /* --- CHAT --- */
     .chat-container {
-      background: rgba(0, 0, 0, 0.2);
+      background: rgba(255, 255, 255, 0.03);
+      backdrop-filter: var(--blur);
+      -webkit-backdrop-filter: var(--blur);
       border-radius: 16px;
       padding: 20px;
-      height: 320px;
+      height: 280px;
       overflow-y: auto;
-      border: 1px solid rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.08);
       display: flex;
       flex-direction: column;
       gap: 12px;
       margin: 16px 0;
+      box-shadow: inset 0 2px 10px rgba(0, 0, 0, 0.5);
+      scrollbar-width: thin;
+      scrollbar-color: var(--neon-blue) transparent;
     }
 
     .miBubble {
@@ -473,10 +472,12 @@
     }
 
     .miBubble.sys {
-      background: rgba(255, 255, 255, 0.1);
+      background: rgba(255, 255, 255, 0.08);
       align-self: flex-start;
       border-bottom-left-radius: 2px;
-      color: #e2e8f0;
+      color: #94a3b8;
+      font-size: 0.85rem;
+      border-left: 2px solid var(--neon-amber);
     }
 
     .miBubble.user {
@@ -484,37 +485,116 @@
       align-self: flex-end;
       border-bottom-right-radius: 2px;
       color: #fff;
-      box-shadow: 0 4px 12px rgba(67, 97, 238, 0.3);
+      box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
     }
 
-    /* --- ENTRIES --- */
-    .miEntry {
-      background: rgba(255, 255, 255, 0.03);
-      border: 1px solid rgba(255, 255, 255, 0.05);
-      border-radius: 12px;
-      padding: 16px;
+    /* --- ENTRIES (Minimalist Split Layout) --- */
+    .miEntriesGrid {
       display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 12px;
+      flex-direction: column;
+      gap: 16px;
     }
 
-    .miEntryDetails {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 12px 24px;
+    .miEntry {
+      display: flex;
+      background: var(--glass-bg);
+      backdrop-filter: var(--blur);
+      -webkit-backdrop-filter: var(--blur);
+      border: 1px solid var(--glass-border);
+      border-top: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 16px;
+      overflow: hidden;
+      min-height: 120px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+      transition: transform 0.2s;
     }
 
-    .data-point span {
-      display: block;
-      font-size: 0.7rem;
-      color: #64748b;
-      margin-bottom: 2px;
+    .miEntry:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 15px 40px rgba(0, 0, 0, 0.4);
     }
 
-    .data-point strong {
+    /* Left Side: Solid Colored Block */
+    .miEntryPartBlock {
+      width: 35%;
+      background: linear-gradient(135deg, var(--brand-secondary), var(--brand-primary));
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      padding: 20px;
+      position: relative;
+    }
+
+    .miEntryPartBlock label {
+      color: rgba(255, 255, 255, 0.7);
+      font-size: 0.65rem;
+      margin-bottom: 4px;
+    }
+
+    .miEntryPartBlock strong {
+      color: #fff;
+      font-size: 1.25rem;
       font-family: var(--font-mono);
+      word-break: break-all;
+      line-height: 1.2;
+    }
+
+    /* Right Side: Information Block */
+    .miEntryInfoBlock {
+      flex: 1;
+      padding: 16px 20px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      background: rgba(0, 0, 0, 0.15);
+    }
+
+    .miInfoPoint {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .miInfoPoint label {
+      font-size: 0.6rem;
+      color: #94a3b8;
+      margin-bottom: 2px;
+      font-weight: 500;
+    }
+
+    .miInfoPoint strong {
+      font-size: 1rem;
+      font-family: var(--font-mono);
+    }
+
+    .miInfoPoint.qty strong {
+      color: var(--neon-green);
+      font-size: 1.25rem;
+    }
+
+    .miEntryActions {
+      grid-column: span 2;
+      display: flex;
+      gap: 8px;
+      margin-top: 6px;
+      justify-content: flex-end;
+    }
+
+    .miEntryActions button {
+      padding: 6px 12px;
+      font-size: 0.7rem;
+      height: auto;
+      min-width: 60px;
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .miEntryActions button.edit {
+      border-color: rgba(59, 130, 246, 0.3);
       color: var(--neon-cyan);
+    }
+
+    .miEntryActions button.del {
+      border-color: rgba(239, 68, 68, 0.3);
+      color: var(--neon-red);
     }
 
     /* --- CHIPS & NOTIFICATIONS --- */
@@ -561,6 +641,12 @@
       }
     }
 
+    /* Say label styling */
+    .say-label {
+      color: var(--neon-cyan);
+      margin-right: 4px;
+    }
+
     /* Canvas */
     canvas {
       background: #fff;
@@ -579,7 +665,7 @@
         <div class="brand-logo"></div>
         <div class="brand-text">
           <span>MATERIAL INVENTORY</span>
-          <span>CYBERFLUX // SYSTEMS</span>
+          <span>INDUSTRIAL // OPERATIONS</span>
         </div>
       </div>
       <span class="chip" id="miStatusChip"
@@ -651,6 +737,24 @@
         </div>
       </div>
 
+      <!-- ElevenLabs Config (Collapsible) -->
+      <details style="margin-bottom: 16px; background: rgba(0,0,0,0.2); border-radius: 8px; padding: 8px;">
+        <summary style="font-size: 0.7rem; color: #64748b; cursor: pointer; user-select: none;">⚙️ ELEVENLABS SETTINGS
+        </summary>
+        <div style="padding-top: 12px; display: grid; gap: 8px;">
+          <div class="input-group" style="margin-bottom:0;">
+            <label style="font-size: 0.65rem;">API Key</label>
+            <input id="miElevenKey" type="password" placeholder="xi-..." style="padding: 8px; font-size: 0.8rem;"
+              autocomplete="off" />
+          </div>
+          <div class="input-group" style="margin-bottom:0;">
+            <label style="font-size: 0.65rem;">Voice ID (Optional Override)</label>
+            <input id="miElevenVoice" placeholder="Voice ID" style="padding: 8px; font-size: 0.8rem;"
+              autocomplete="off" />
+          </div>
+        </div>
+      </details>
+
       <!-- Waveform Visualizer -->
       <div class="visualizer" id="miVisualizer">
         <div class="bar"></div>
@@ -671,8 +775,17 @@
           🎙️ Record Entry
         </button>
         <button id="miFlowMode" type="button"
-          style="flex: 0.6; background: rgba(147,51,234,0.1); border: 1px solid rgba(147,51,234,0.4); color: var(--neon-purple); font-size: 0.85rem;">
+          style="flex: 0.6; background: rgba(147,51,234,0.1); border: 1px solid rgba(147,51,234,0.4); color: #fff; font-size: 0.85rem;">
           📋 Standard
+        </button>
+      </div>
+
+
+
+      <div style="margin-bottom: 16px;">
+        <button id="miPtt" type="button"
+          style="width: 100%; border: none; background: linear-gradient(135deg, #f97316, #ea580c); color: #fff; height: 60px; font-size: 1rem; box-shadow: 0 10px 25px rgba(249, 115, 22, 0.3); text-shadow: 0 1px 2px rgba(0,0,0,0.2);">
+          ✋ HOLD PUSH-TO-TALK (ACTIVE)
         </button>
       </div>
 
